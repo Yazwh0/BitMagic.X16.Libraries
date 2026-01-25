@@ -1,0 +1,134 @@
+.scope ZsmPlayer
+
+.proc get_byte
+
+    inc read_position
+    bne +skip
+    inc read_position + 1
+    lda read_position + 1
+    cmp #$c0
+    bne +skip
+
+    inc RAM_BANK
+    lda #$a0
+    sta read_position + 1
+    stz read_position
+
+.skip:
+    lda read_position: $a00f        ; updated above, starting a byte before the end of the header, do like this so flags are right
+
+    rts
+
+.endproc
+
+.proc tick
+
+    lda countdown: #$00
+    beq tick_loop
+
+    dec countdown
+    rts
+
+.tick_loop:
+    jsr get_byte
+
+    bmi exit
+
+    ; 0x00xx_xxxx - Vera write
+    ; 0x0100_0000 - Ext Command
+    ; 0x01xx_xxxx - YM write
+
+    tax
+    and #0b0100_0000
+    bne ext_or_ym
+
+.vera:
+    .constvar uint psg_start = 0x1f9c0
+
+    lda ADDRx_H
+    sta addr_h
+    lda ADDRx_M
+    sta addr_m
+    lda ADDRx_L
+    sta addr_l
+
+    lda #^psg_start
+    sta ADDRx_H
+    lda #>psg_start
+    sta ADDRx_M
+    clc
+    txa
+    adc #<psg_start
+    sta ADDRx_L
+
+    jsr get_byte
+    sta DATA0
+    jmp -tick_loop
+
+    lda addr_h: #$ab
+    sta ADDRx_H
+    lda addr_m: #$ab
+    sta ADDRx_M
+    lda addr_l: #$ab
+    sta ADDRx_L
+
+.ext_or_ym:
+    txa
+    and #0b0011_1111
+    beq ext_command
+
+; use the masked value in .A for the loop via .Y
+.ym:
+    tay
+
+.ym_loop:
+.:  bit $9f41
+    bmi -
+    jsr get_byte
+    sta $9f40
+    jsr get_byte
+    sta $9f41
+
+    dey
+    bne -ym_loop
+    jmp -tick_loop
+
+.ext_command:
+    jsr get_byte
+    ; returns 0xccnn_nnnn - cc = command, nnnnnnnn = length
+    and #0b0011_1111
+    tax
+
+.:  beq -tick_loop
+    jsr get_byte
+    dex
+    jmp -
+
+.exit:
+    and #$7f
+    beq all_done
+    dec
+    sta countdown
+
+.step_done:
+    rts
+
+.all_done:
+    ; loop or flag or whatever
+    lda ram_bank: #$00
+    sta RAM_BANK
+    lda #<$a00f
+    sta get_byte:read_position
+    lda #>$a00f
+    sta get_byte:read_position + 1
+    rts
+
+.endproc
+
+.proc init_player
+
+    lda RAM_BANK
+    sta tick:ram_bank
+    rts
+
+.endproc

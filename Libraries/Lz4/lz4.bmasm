@@ -1,0 +1,603 @@
+import BM="BM.bmasm";
+import Init="Initialisation.bmasm";
+
+public static void Setup()
+{
+.segment Bss, scope:Lz4
+    .padvar byte step
+    .padvar byte decompress_state
+    .padvar ushort block_length
+    .padvar ushort copy_length
+    .padvar ushort copy_lookback
+    .padvar ushort this_byte_count	; 16 bit counter for this iteration
+	.padvar ushort requested_byte_count ; how many bytes were requested to be read
+    .padvar ushort source_length	; 16 bit counter for total source length
+	.padvar ushort this_length		; how many bytes are to be read this time -- min of the legnth or the count from the source
+	.padvar byte all_done			; used to incidate that this iteration is the last.endsegment
+}
+
+private static List<Action> Procs = new List<Action>();
+
+public static Lz4Decompressor Create()
+{
+	return new Lz4Decompressor();
+}
+
+public static void ChangeToRam<T>(T destination)
+{
+	lda #$20 ; JSR
+	sta Lz4:write_litteral:dest_call
+	lda #<Lz4:writebyte_ram
+	sta Lz4:write_litteral:dest_call + 1
+	lda #>Lz4:writebyte_ram
+	sta Lz4:write_litteral:dest_call + 2
+
+	lda #<Lz4:write_copy_ram
+	sta Lz4:decompress:write_proc
+	lda #>Lz4:write_copy_ram
+	sta Lz4:decompress:write_proc + 1
+
+	ToRam(destination);
+}
+
+public static void ToRam<T>(T destination)
+{
+	lda #<@(destination)
+	sta Lz4:writebyte_ram:write_pos
+	lda #>@(destination)
+	sta Lz4:writebyte_ram:write_pos + 1
+}
+
+public static void ChangeToVram<T>(T destination)
+{
+	lda #$8d ; STA
+	sta Lz4:write_litteral:dest_call
+	lda #<DATA0
+	sta Lz4:write_litteral:dest_call + 1
+	lda #>DATA0
+	sta Lz4:write_litteral:dest_call + 2
+
+	lda #<Lz4:write_copy_vram
+	sta Lz4:decompress:write_proc
+	lda #>Lz4:write_copy_vram
+	sta Lz4:decompress:write_proc + 1
+
+	ToVram(destination);
+}
+
+public static void ToVram<T>(T destination)
+{
+	lda #<@(destination)
+	sta ADDRx_L
+	lda #>@(destination)
+	sta ADDRx_M
+	lda #^@(destination) | $10
+	sta ADDRx_H
+}
+
+public class Lz4Decompressor
+{
+	internal Action ReadSource { get; set; }
+	internal Action SetReadLength { get; set; }
+	internal List<Action> InitialisationProcs { get; set; } = new();
+	internal bool Debugging { get; set; } = false;
+
+	internal bool WriteToRam { get; set; } = false;
+	internal bool WriteToVram { get; set; } = false;
+
+	public Lz4Decompressor FromRam(string sourceData)
+	{
+		InitialisationProcs.Add(() =>
+		{
+			.constvar byte ptr next_byte = getbyte:read_pos
+			lda #<@(sourceData)
+			sta getbyte:read_pos
+			lda #>@(sourceData)
+			sta getbyte:read_pos + 1
+		});
+
+		ReadSource = () =>
+		{
+			; read from RAM
+			lda read_pos: $abcd
+			inc read_pos
+			bne exit
+			inc read_pos + 1
+		};
+
+		return this;
+	}
+
+	public Lz4Decompressor FromSpi()
+	{
+		ReadSource = () =>
+		{
+			lda SPI_DATA
+		};
+
+		return this;
+	}
+
+	public Lz4Decompressor ToRam()
+	{
+		WriteToRam = true;
+		return this;
+	}
+
+	public Lz4Decompressor ToVram()
+	{
+		WriteToVram = true;
+		return this;
+	}
+
+	public Lz4Decompressor WithReadLength(ushort length)
+	{
+		int length_l = (length) & 0xff;
+		int length_h = ((length) >> 8) & 0xff;
+
+		SetReadLength = () =>
+		{
+			bcs +skip_initialise_byte_count
+			lda #@(length_l)
+			sta this_byte_count
+			lda #@(length_h)
+			sta this_byte_count + 1
+		.skip_initialise_byte_count:
+			lda #@(length_l)
+			sta requested_byte_count
+			lda #@(length_h)
+			sta requested_byte_count + 1
+		};
+
+		return this;
+	}
+
+	public Lz4Decompressor WithReadLengthXY()
+	{
+		SetReadLength = () =>
+		{
+			; this doesn't quite work, it needs to be adjusted as above.
+			stx this_byte_count
+			sty this_byte_count + 1
+			stx requested_byte_count
+			sty requested_byte_count + 1
+		};
+
+		return this;
+	}
+
+	public Lz4Decompressor WithDebugging()
+	{
+		Debugging = true;
+		return this;
+	}
+
+	public void Build()
+	{
+		Procs.Add(() =>
+		{
+		.scope Lz4
+
+		.const GET_INIT_LENGTH = 0
+		.const GET_LITTERAL_LENGTH = 1 << 1
+		.const WRITE_LITTERAL = 2 << 1
+		.const GET_LOOKBACK_L = 3 << 1
+		.const GET_LOOKBACK_H = 4 << 1
+		.const GET_COPY_LENGTH = 5 << 1
+		.const WRITE_COPY = 6 << 1
+
+		.const MORE_LITTERAL_LENGTH = 0x13
+
+		.proc decompress_init
+
+			stx source_length
+			sty source_length + 1
+
+			foreach (var initProc in InitialisationProcs)
+				initProc();
+
+			stz decompress_state
+
+			rts
+		.endproc
+
+		; compress data from the input.
+		; $YYXX max input bytes to read
+		.proc decompress
+
+			SetReadLength();
+
+			; set this_byte_count to the min of itself and source_length -- we do this so we only need to have one counter
+			; compare high bytes,
+			stz all_done			; clear the all done flag
+			lda this_byte_count + 1
+			cmp source_length + 1
+			bcc set_this_length		; carry is set if source_length is higher
+			bne replace				; not equal, so source_length is lower, other wise check lower byte
+
+			lda this_byte_count
+			cmp source_length
+			bcc set_this_length
+			beq set_this_length
+
+		.replace:
+			lda source_length
+			sta this_byte_count
+			lda source_length + 1
+			sta this_byte_count + 1
+			lda #1
+			sta all_done			; indicate this is the last batch
+
+		.set_this_length:
+			lda this_byte_count
+			sta this_length
+			lda this_byte_count + 1
+			sta this_length + 1
+
+		; adjust this_byte_count so it can be counted down
+			clc
+			lda this_byte_count
+			adc #1
+			sta this_byte_count
+			lda this_byte_count + 1
+			adc #0
+			sta this_byte_count + 1
+
+			lda this_byte_count
+			beq done
+			inc this_byte_count + 1
+
+		.done:
+			ldx decompress_state
+			if (Debugging) {
+			inc step 						; for debugging
+			}
+			jmp (state_jumptable, x)
+
+		.state_jumptable:
+			.word get_length_init
+			.word get_litteral_length
+			.word write_litteral
+			.word get_lookback_l
+			.word get_lookback_h
+			.word get_copy_length
+		.write_proc:
+			if (WriteToRam && WriteToVram) {
+				.word $abcd
+			} else if (WriteToRam) {
+				.word write_copy_ram
+			} else if (WriteToVram) {
+				.word write_copy_vram
+			} else {
+				.word $abcd
+			}
+
+		.decompress_exit:
+			; adjust source_length
+			lda source_length
+			sec
+			sbc this_length
+			sta source_length
+			lda source_length + 1
+			sbc this_length + 1
+			sta source_length + 1
+
+			lda all_done
+			bne decompress_done
+			clc								; indicate we're not done, just ran out of the requested bytes
+			rts
+
+		.decompress_done:
+			; need to store how many bytes are left, so decompress can be called again.
+			; subtract this_length from requested_byte_count
+
+			sec
+			lda requested_byte_count
+			sbc this_length
+			sta this_byte_count
+			lda requested_byte_count + 1
+			sbc this_length + 1
+			sta this_byte_count + 1
+
+			sec								; indicate we're done
+			rts
+
+		.endproc
+
+		.proc get_length_init
+
+			if (Debugging) {
+			; unnecessary, but handy for debugging
+			stz block_length
+			stz copy_length
+			}
+
+			stz copy_length + 1
+			stz block_length + 1
+
+			jsr getbyte
+
+			; need to do something with the low bits
+			tax
+			clc
+			and #$f
+			adc #4
+			sta copy_length					; gets completed after the literal block
+
+			txa
+			lsr
+			lsr
+			lsr
+			lsr
+			beq no_litteral
+			sta block_length
+			cmp #$0f
+			beq more_length
+
+			ldx #WRITE_LITTERAL				; write litteral to output
+			stx decompress_state
+			jmp decompress:done
+
+		.more_length:
+			ldx #GET_LITTERAL_LENGTH		; keep reading length data
+			stx decompress_state
+			jmp decompress:done
+
+		.no_litteral:
+			lda #GET_LOOKBACK_L
+			sta decompress_state			; we have the copy offset already
+			jmp decompress:done
+
+		.all_done:
+			jmp decompress:decompress_done
+
+		.endproc
+
+		.proc get_litteral_length
+
+		.loop:
+			jsr getbyte
+			beq done
+
+			tax								; keep so we can check if its not $ff
+			clc
+			adc block_length
+			sta block_length
+			lda block_length + 1
+			adc #0
+			sta block_length + 1
+
+			cpx #$ff
+			beq -loop
+
+		.done:
+			ldx #WRITE_LITTERAL
+			stx decompress_state
+			jmp decompress:done
+		.endproc
+
+		.proc get_copy_length
+		.loop:
+			jsr getbyte
+			beq done
+
+			tax								; keep so we can check if its not $ff
+			clc
+			adc copy_length
+			sta copy_length
+			lda copy_length + 1
+			adc #0
+			sta copy_length + 1
+
+			cpx #$ff
+			beq -loop
+
+		.done:
+			ldx #WRITE_COPY					; copy litteral
+			stx decompress_state
+			jmp decompress:done
+
+		.endproc
+
+		.proc get_lookback_l
+			jsr getbyte
+			sta copy_lookback
+
+			ldx #GET_LOOKBACK_H				; get high byte of lookback
+			stx decompress_state
+			jmp decompress:done
+		.endproc
+
+		.proc get_lookback_h
+			jsr getbyte
+			sta copy_lookback + 1
+
+			lda copy_length
+			beq no_copy
+			cmp #MORE_LITTERAL_LENGTH
+			beq next_copy_length
+
+			ldx #WRITE_COPY					; write copy
+			stx decompress_state
+			jmp decompress:done
+
+		.next_copy_length:
+			lda #GET_COPY_LENGTH
+			sta decompress_state			; read the length of the copy
+			jmp decompress:done
+
+		.no_copy:
+			stz decompress_state			; read the length of the copy
+			jmp decompress:done
+			jmp decompress:decompress_done	; all done!
+		.endproc
+
+		if (WriteToRam) {
+			.proc write_copy_ram
+
+				sec
+				lda writebyte_ram:write_pos
+				sbc copy_lookback
+				sta lookback
+
+				lda writebyte_ram:write_pos + 1
+				sbc copy_lookback + 1
+				sta lookback + 1
+
+			.loop:
+				lda lookback: $abcd
+				jsr writebyte_ram
+
+				inc lookback
+				bne skip
+				inc lookback + 1
+
+			.skip:
+				sec
+				lda copy_length
+				sbc #1
+				sta copy_length
+
+				lda copy_length + 1
+				sbc #0
+				sta copy_length + 1
+
+				ora copy_length
+				bne -loop
+
+				stz decompress_state
+				jmp decompress:done
+
+			.endproc
+
+		; write a byte to the output
+			.proc writebyte_ram
+				sta write_pos: $abcd
+				inc write_pos
+				bne exit
+				inc write_pos + 1
+			.exit:
+				rts
+			.endproc
+		}
+
+		if (WriteToVram) {
+			.proc write_copy_vram
+
+				lda ADDRx_H
+				pha
+				ldy ADDRx_M
+				ldx ADDRx_L
+
+
+				lda #01
+				sta CTRL
+
+				sec
+				txa
+				sbc copy_lookback
+				tax						; keep ADDRx_L in .X and set it each time to avoid problems with data port reads.
+
+				tya
+				sbc copy_lookback + 1
+				sta ADDRx_M
+
+				pla
+				and #$01
+				sbc #0
+				ora #$10
+				sta ADDRx_H
+
+				; copy_length is adjusted so we can do dec bne dec bne
+
+				;ldy copy_length			; use .Y for the lower part of the count
+
+			.loop:
+				stx ADDRx_L
+				inx
+				lda DATA1
+				sta DATA0
+
+			.skip:
+				sec
+				lda copy_length
+				sbc #1
+				sta copy_length
+				lda copy_length + 1
+				sbc #0
+				sta copy_length + 1
+				ora copy_length
+				bne -loop
+
+			.done:
+				stz CTRL
+
+				stz decompress_state
+				jmp decompress:done
+
+			.endproc
+		}
+
+		.proc write_litteral
+
+			nop
+		.loop:
+			jsr getbyte
+		.dest_call:
+			jsr $abcd
+
+			sec
+			lda block_length
+			sbc #1
+			sta block_length
+
+			lda block_length + 1
+			sbc #0
+			sta block_length + 1
+
+			ora block_length
+			bne -loop
+
+		.done:
+			lda #GET_LOOKBACK_L
+			sta decompress_state			; we have the copy offset already
+			jmp decompress:done
+
+		.endproc
+
+		; returns the next byte from the input in .A
+		.proc getbyte
+
+			dec this_byte_count
+			bne +
+			dec this_byte_count + 1
+			beq this_batch_done
+
+		.:
+			ReadSource();
+		.exit:
+			rts
+
+		; exhausted bytes requested, clear up the stack and jump out
+		.this_batch_done:
+			pla
+			pla
+			jmp decompress:decompress_exit
+
+		.endproc
+
+		.endscope
+		});
+	}
+}
+
+public override void Initialise()
+{
+    Setup();
+}
+
+public void Generate()
+{
+    foreach (var proc in Procs)
+        proc();
+}

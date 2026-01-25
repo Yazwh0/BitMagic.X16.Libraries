@@ -1,0 +1,1358 @@
+import BM="BM.bmasm";
+import Init="Initialisation.bmasm";
+
+public static void Setup()
+{
+
+.segment ZP, $02, scope:FastDos
+
+    .padvar ushort temp_pointer       ; needs to be ZP
+    .padvar string ptr filename_pointer
+
+.segment Bss, scope:FastDos
+
+; fat directory entry
+.proc directory_entry
+    .padvar string[11] filename
+    .padvar byte attributes
+    .padvar byte reserved
+    .padvar byte[5] creation_time
+    .padvar byte[2] last_access_date
+    .padvar ushort first_cluster_high
+    .padvar byte[4] last_modification
+    .padvar ushort first_cluster_low
+    .padvar uint file_size
+.endproc
+
+
+.segment FastDos, $a000, scope:FastDos
+
+    .constvar uint[128] current_data $ae00
+    .constvar string current_directory_temp $b000
+
+    ; static data about the sd card
+    .padvar string[15] name
+    .padvar uint size                            ; size of the sd card in sectors
+
+    .padvar uint partition_first_sector
+    .padvar byte sectors_per_cluster
+    .padvar byte sectors_per_cluster_shift      ; how much we have to shift to convert a sector to a cluster
+    .padvar uint sectors_per_fat_x2
+    .padvar uint root_directory_cluster
+    .padvar ushort reserved_sectors
+    .padvar uint fat_begin_sector               ; actual sector on the drive
+    .padvar uint first_cluster_sector
+
+    ; where we are on the card
+    .padvar uint current_directory_sector
+    .padvar uint current_directory_cluster
+    .padvar string ptr current_directory_ptr        ; pointer to the string for the directory name
+
+    ; --- current cluster read
+    .padvar uint current_sector
+    .padvar byte sectors_left
+    .padvar uint file_size
+    .padvar ushort cluster_count
+    .padvar ushort cluster_position             ; for the callee to use
+
+    ; --- file return
+    .padvar uint file_cluster
+
+    ; --- temp vars
+    .padvar byte depth
+
+    ; --- state storage
+    .padvar uint snap_current_sector
+    .padvar byte snap_sectors_left
+    .padvar ushort snap_cluster_pointer
+    .padvar ushort snap_cluster_position
+
+    ; --- debug
+    .padvar ushort wait_count
+
+    .align 4
+    .padvar uint cluster_chain
+
+.endsegment
+}
+
+private static Action? Proc = null;
+
+public static FastDos Create()
+{
+    return new FastDos();
+}
+
+public class FastDos
+{
+    internal int RamBank { get; set; } = 2;
+
+    public FastDos WithRamBank(int bank)
+    {
+        RamBank = bank;
+        return this;
+    }
+
+    public void Build()
+    {
+        Proc = () => {
+
+.scope FastDos
+    .constvar byte temp_bank @(RamBank)
+
+.proc initialise
+    jsr FastDos:get_current_directory
+    jsr FastDos:get_current_partition_details
+    jsr FastDos:get_partition_details   ; set cwd to root
+    jsr FastDos:change_directory_tocurrent
+    rts
+.endproc
+
+.proc open_file
+    jsr FastDos:get_file_first_cluster  ; get the file cluster and size of the filename at $yyxx
+    bcs done
+    jsr FastDos:read_cluster_chain      ; cache the cluster chain in memory from file_cluster and reset pointer
+    jsr FastDos:open_cluster_chain      ; switch file cluster to current sector ready to start
+    jsr FastDos:open_current_sector     ; open the file
+    clc
+.done:
+    rts
+.endproc
+
+.proc get_current_directory
+    ; $=C returns
+    ; 2 : header (eg 0x801)
+    ; 2 : unsure, 0x01 0x01
+    ; 2 : size in bytes
+    ; 1 : inverse petscii code 0x12
+    ; x : quote enclosed string for the volume name (null terminated)
+
+    ; directory entries from present to root
+    ; 2 : unsure 0x01 0x01
+    ; 2 : size
+    ; x : untrimmed quote enclosed string for the name
+    ; 5 : DIR + 0x20 + 0x00
+    ; next dir entry unless name is '/', if so then stop
+
+    var GetCurrentDirectory = "$=C";
+
+    lda #@(GetCurrentDirectory.Length)
+    ldx #<get_directory
+    ldy #>get_directory
+
+    jsr SETNAM
+
+    lda #15
+    ldx #8
+    ldy #0
+    jsr SETLFS
+
+    jsr OPEN
+
+    ldx #15
+    jsr CHKIN
+
+    lda #temp_bank
+    sta RAM_BANK
+
+    stz depth
+; discard volume
+    ldx #6          ; remove header
+.loop:
+    jsr GETIN
+    dex
+    bne -loop
+.loop:
+    jsr GETIN
+    cmp #$22
+    bne -loop
+.loop:
+    jsr GETIN
+    cmp #$00
+    bne -loop
+
+    ldx #4          ; remove header
+.loop:
+    jsr GETIN
+    dex
+    bne -loop
+
+.line_start:
+; read and discard to a quote mark
+    lda store_location + 1
+    pha
+    lda store_location + 2
+    pha
+    inc depth
+.loop:
+    jsr GETIN
+    cmp #$22
+    bne -loop
+; read and store to a quote mark
+.loop:
+    jsr GETIN
+    cmp #$22    ; quote mark
+    beq +line_done
+    cmp #$2f    ; /
+    beq +read_done
+    jsr store_location
+    inx
+    jmp -loop
+.line_done:
+    lda #$2f
+    jsr store_location
+    jmp -line_start
+
+.store_location:
+    sta current_directory_temp
+    inc store_location + 1
+    bne +skip
+    inc store_location + 2
+    .skip:
+    rts
+
+.read_done:
+    lda #15
+    jsr CLOSE
+;   now reverse the strings
+
+    ; return pointer in current_directory_ptr
+    lda store_location + 1
+    sta current_directory_ptr
+    lda store_location + 2
+    sta current_directory_ptr + 1
+
+    pla                     ; remove last entry
+    pla
+    dec depth
+    beq all_done            ; in case we're at root
+.line_start:
+    pla
+    sta read_location + 2
+    pla
+    sta read_location + 1
+
+.read_location:
+    lda current_directory_temp
+    inc read_location + 1
+    bne +skip
+    inc read_location + 2
+    .skip:
+    cmp #$2f
+    beq +line_done
+    jsr store_location
+    jmp -read_location
+
+.line_done:
+    dec depth
+    beq all_done
+    lda #$2f
+    jsr store_location
+    jmp -line_start
+
+.all_done:
+    lda #0                  ; null terminated
+    jsr store_location
+
+    rts
+
+.get_directory:
+    BM.Bytes(BM.StringToPetscii(GetCurrentDirectory, false));
+.endproc
+
+.proc get_current_partition_details
+    var GetPartition = "G-P";
+
+    lda #@(GetPartition.Length)
+    ldx #<get_partition
+    ldy #>get_partition
+
+    jsr SETNAM
+
+    lda #15
+    ldx #8
+    ldy #15
+    jsr SETLFS
+
+    jsr OPEN
+
+    ldx #15
+    jsr CHKIN
+
+    jsr GETIN       ; Partition type
+    nop
+    jsr GETIN       ; ??
+    nop
+    jsr GETIN       ; Partition Number
+
+    ldx #15
+.loop:
+    jsr GETIN       ; next is the partition name
+.store:
+    sta name
+    inc store+1
+    dex
+    bne -loop
+
+    jsr GETIN
+    sta partition_first_sector + 3
+    jsr GETIN
+    sta partition_first_sector + 2
+    jsr GETIN
+    sta partition_first_sector + 1
+    jsr GETIN
+    sta partition_first_sector
+
+    jsr GETIN
+    jsr GETIN
+    jsr GETIN
+    jsr GETIN
+
+    jsr GETIN
+    sta size + 3
+    jsr GETIN
+    sta size + 2
+    jsr GETIN
+    sta size + 1
+    jsr GETIN
+    sta size
+
+    lda #15
+    jsr CLOSE
+
+    jsr CLRCHN
+
+    rts
+
+.get_partition:
+    BM.Bytes(GetPartition);
+.endproc
+
+; from here on we can't use Kernel IO
+.proc get_partition_details
+
+    Deselect();
+    Select();
+
+    ; read lba
+    lda #($40 | 17)     ; 17 is read single block
+    sta SPI_DATA
+    lda partition_first_sector + 3
+    sta SPI_DATA
+    lda partition_first_sector + 2
+    sta SPI_DATA
+    lda partition_first_sector + 1
+    sta SPI_DATA
+    lda partition_first_sector
+    sta SPI_DATA
+    lda #1
+    sta SPI_DATA
+
+    ; enable auto-tx
+	lda SPI_CTRL
+	ora #$04            ; not in the docs! AutoTx
+	sta SPI_CTRL
+
+.loop:
+    lda SPI_DATA
+    cmp #$fe
+    bne -loop
+
+    ldx #$0d                    ; 13
+.loop:
+    lda SPI_DATA
+    dex
+    bne -loop
+
+    lda SPI_DATA
+    sta sectors_per_cluster
+
+    lda SPI_DATA                ; 14
+    sta reserved_sectors
+    lda SPI_DATA                ; 15
+    sta reserved_sectors + 1
+
+    ldx #$14                    ; 35
+.loop:
+    lda SPI_DATA
+    dex
+    bne -loop
+
+    ; multiple the sectors by two to make is easier to add to first cluster calc
+    lda SPI_DATA                ; 36
+    asl
+    sta sectors_per_fat_x2
+    lda SPI_DATA                ; 37
+    rol
+    sta sectors_per_fat_x2 + 1
+    lda SPI_DATA                ; 38
+    rol
+    sta sectors_per_fat_x2 + 2
+    lda SPI_DATA                ; 38
+    rol
+    sta sectors_per_fat_x2 + 3
+
+    ldx #$04                    ; 42
+.loop:
+    lda SPI_DATA
+    dex
+    bne -loop
+
+    lda SPI_DATA                ; 43
+    sta root_directory_cluster
+    sta current_directory_cluster
+    lda SPI_DATA                ; 44
+    sta root_directory_cluster + 1
+    sta current_directory_cluster + 1
+    lda SPI_DATA                ; 45
+    sta root_directory_cluster + 2
+    sta current_directory_cluster + 2
+    lda SPI_DATA                ; 46
+    sta root_directory_cluster + 3
+    sta current_directory_cluster + 3
+
+    ; now read all the rest of the 512 + crc data
+    ; 512 - 46 + 2
+    ldx #<(512 - 46 + 2)
+    ldy #(>(512 - 46 + 2))+ 1
+.loop:
+    lda SPI_DATA
+    dex
+    bne -loop
+    dey
+    beq +done
+    jmp -loop
+.done:
+    ; deselect
+    ;Deselect();
+
+    ; calculate fat_begin
+    clc
+    lda partition_first_sector
+    adc reserved_sectors
+    sta fat_begin_sector
+    lda partition_first_sector + 1
+    adc reserved_sectors + 1
+    sta fat_begin_sector + 1
+    lda partition_first_sector + 2
+    adc #0
+    sta fat_begin_sector + 2
+    lda partition_first_sector + 3
+    adc #0
+    sta fat_begin_sector + 3
+
+    ; cluster begin = fat_begin_sector + sectors_per_fat_x2
+    ; set current directory to root
+    clc
+    lda fat_begin_sector
+    adc sectors_per_fat_x2
+    sta first_cluster_sector
+    sta current_directory_sector
+    lda fat_begin_sector + 1
+    adc sectors_per_fat_x2 + 1
+    sta first_cluster_sector + 1
+    sta current_directory_sector + 1
+    lda fat_begin_sector + 2
+    adc sectors_per_fat_x2 + 2
+    sta first_cluster_sector + 2
+    sta current_directory_sector + 2
+    lda fat_begin_sector + 3
+    adc sectors_per_fat_x2 + 3
+    sta first_cluster_sector + 3
+    sta current_directory_sector + 3
+
+    ; calculate cluster to sector shift
+    ldx #0
+    lda sectors_per_cluster
+    beq error
+.loop:
+    lsr
+    bcs +done
+    inx
+    cpx #8
+    bne -loop
+    jmp error
+
+.done:
+    stx sectors_per_cluster_shift
+
+    ;Deselect();
+    rts
+.error:
+
+    lda #$ff
+    sta sectors_per_cluster_shift
+    ;Deselect();
+
+    sec
+    rts
+.endproc
+
+; starts with current_directory_ptr
+.proc change_directory_tocurrent
+
+    ldx current_directory_ptr
+    ldy current_directory_ptr + 1
+
+    stx filename_pointer
+    sty filename_pointer + 1
+
+    lda (filename_pointer)
+    bne parse_structure
+
+    ; special case, if the string is blank then we're at the root
+    lda first_cluster_sector
+    sta current_directory_sector
+    lda first_cluster_sector + 1
+    sta current_directory_sector + 1
+    lda first_cluster_sector + 2
+    sta current_directory_sector + 2
+    lda first_cluster_sector + 3
+    sta current_directory_sector + 3
+    rts
+
+.parse_structure:
+    jsr get_file_first_cluster
+    bcc not_done
+
+    rts         ; error
+
+.not_done:
+    lda file_cluster
+    sta current_directory_cluster
+    lda file_cluster + 1
+    sta current_directory_cluster + 1
+    lda file_cluster + 2
+    sta current_directory_cluster + 2
+    lda file_cluster + 3
+    sta current_directory_cluster + 3
+
+    ; convert cluster to sector
+    ; (cluster - 2) * sectors per cluster + first cluster sector
+
+    ; -2
+    sec
+    lda file_cluster
+    sbc #2
+    sta current_directory_sector
+    lda file_cluster + 1
+    sbc #0
+    sta current_directory_sector + 1
+    lda file_cluster + 2
+    sbc #0
+    sta current_directory_sector + 2
+    lda file_cluster + 3
+    sbc #0
+    sta current_directory_sector + 3
+
+    ; multiply by the sectors per cluster
+    ldx sectors_per_cluster_shift
+    beq +skip
+.loop:
+    asl current_directory_sector
+    rol current_directory_sector + 1
+    rol current_directory_sector + 2
+    rol current_directory_sector + 3
+    dex
+    bne -loop
+
+.skip:
+    ; add on first cluster sector
+    clc
+    lda current_directory_sector
+    adc first_cluster_sector
+    sta current_directory_sector
+    lda current_directory_sector + 1
+    adc first_cluster_sector + 1
+    sta current_directory_sector + 1
+    lda current_directory_sector + 2
+    adc first_cluster_sector + 2
+    sta current_directory_sector + 2
+    lda current_directory_sector + 3
+    adc first_cluster_sector + 3
+    sta current_directory_sector + 3
+
+    ; check we're at the end of the path by looking for null or /
+.loop:
+    lda (filename_pointer)      ; we dont know what y is here.
+    beq done                    ; null means we're done.
+    inc filename_pointer
+    bne +
+    inc filename_pointer + 1
+.:  cmp #$2f                    ; path seperator means we search again
+    beq look_again
+    jmp -loop
+
+.look_again:
+    ldx filename_pointer
+    ldy filename_pointer + 1
+    jmp parse_structure
+
+.done:
+    rts
+
+.endproc
+
+; expects current_directory_sector to point to a directory cluster
+; and filename in $yyxx
+.proc get_file_first_cluster
+
+    stx filename_pointer
+    sty filename_pointer + 1
+
+    ; cache the current directory cluster chain so we can locate the entry for the file
+    lda current_directory_cluster
+    sta file_cluster
+    lda current_directory_cluster + 1
+    sta file_cluster + 1
+    lda current_directory_cluster + 2
+    sta file_cluster + 2
+    lda current_directory_cluster + 3
+    sta file_cluster + 3
+
+    jsr read_cluster_chain              ; uses temp_pointer which is needed later
+
+    lda sectors_per_cluster
+    sta sectors_left
+
+    lda current_directory_sector
+    sta current_sector
+    lda current_directory_sector + 1
+    sta current_sector + 1
+    lda current_directory_sector + 2
+    sta current_sector + 2
+    lda current_directory_sector + 3
+    sta current_sector + 3
+
+    jsr open_current_sector
+    jsr wait_for_data
+
+.sector_loop:
+    ldx #16
+    stx depth               ; counts how far through this sector we are
+
+;   load the directory entry into memory (32 bytes at a time)
+.load_loop:
+    ldx #0
+.loop:
+    lda SPI_DATA
+    sta directory_entry, x
+    inx
+    cpx #32
+    bne -loop
+
+    lda directory_entry:attributes
+    cmp #$0f                ; LFN entry
+    beq +next_entry         ; we don't process these
+
+    and #$08                ; volume ID
+    bne +next_entry
+
+    lda directory_entry:filename    ; deleted file
+    cmp #$e5
+    beq +next_entry
+
+; debug code
+;     phx
+;     ; output for debug
+;     ldx #0
+; .loop:
+;     lda directory_entry:filename, x
+;     jsr BSOUT
+;     inx
+;     cpx #11
+;     bne -loop
+
+;     lda #$0d
+;     jsr BSOUT
+
+; .key_loop:
+;     jsr GETIN
+;     beq -key_loop
+
+;     plx
+
+    ldy #0
+
+    lda (filename_pointer), y
+    beq +match_input_done   ; null terminated
+    cmp #$2f                ; \
+    beq +match_input_done
+
+    ; check for the filename
+.compare_char:
+
+    lda directory_entry, y
+    beq +error              ; file not found
+    cmp (filename_pointer), y
+    bne next_entry
+
+    iny                     ; filenames are a max of 11 characters (8.3)
+
+    lda (filename_pointer), y
+    beq +match_input_done   ; null terminated
+    cmp #$2f                ; \
+    beq +match_input_done
+
+    cpy #11
+    beq next_entry
+    jmp -compare_char
+
+.error:
+    sec
+    rts
+
+.next_entry:
+    dec depth               ; all done for this sector?
+    beq next_sector
+    jmp -load_loop
+
+.next_sector:
+    lda SPI_DATA            ; read crc bytes
+    nop
+    nop
+    lda SPI_DATA
+    jsr read_next_sector    ; uses temp pointer
+    jsr wait_for_data
+    jsr check_eof
+    bcs +error
+
+    jmp -sector_loop
+
+.match_input_done:
+                            ; ensure there isn't anything else in the filename on disc
+    cpy #11
+    beq +done
+
+    lda directory_entry, y
+    cmp #$20
+    bne next_entry
+
+    iny
+    jmp match_input_done
+
+.done:
+    cpx #16                 ; nothing read, so we're at the end of the directory
+    beq +error
+
+    lda directory_entry:first_cluster_low
+    sta file_cluster
+    lda directory_entry:first_cluster_low + 1
+    sta file_cluster + 1
+    lda directory_entry:first_cluster_high
+    sta file_cluster + 2
+    lda directory_entry:first_cluster_high + 1
+    sta file_cluster + 3
+
+    lda directory_entry:file_size
+    sta file_size
+    lda directory_entry:file_size + 1
+    sta file_size + 1
+    lda directory_entry:file_size + 2
+    sta file_size + 2
+    lda directory_entry:file_size + 3
+    sta file_size + 3
+
+    ; cleanup
+.cleanup:
+    dec depth
+    beq +done
+    ; read 32 bytes
+    ldx #32
+.loop:
+    lda SPI_DATA
+    dex
+    bne -loop
+    jmp -cleanup
+
+.done:
+    lda SPI_DATA ; crc
+    nop
+    nop
+    lda SPI_DATA
+
+    clc
+    rts
+
+.error:
+
+    sec
+    rts
+
+.endproc
+
+; point current sector to the first entry of the cluster chain
+.proc open_cluster_chain
+
+    lda cluster_chain
+    sta current_sector
+    lda cluster_chain + 1
+    sta current_sector + 1
+    lda cluster_chain + 2
+    sta current_sector + 2
+    lda cluster_chain + 3
+    sta current_sector + 3
+
+    lda sectors_per_cluster     ; do this here as the next call is likley to be get the data
+    sta sectors_left
+
+    rts
+
+.endproc
+
+; opens the sdcard at current_sector ready for reading, also reset the count
+.proc open_current_sector
+
+    Deselect();
+    Select();
+
+    ; read current sector
+    lda #($40 | 17)     ; 17 is read single block
+    sta SPI_DATA
+    lda current_sector + 3
+    sta SPI_DATA
+    lda current_sector + 2
+    sta SPI_DATA
+    lda current_sector + 1
+    sta SPI_DATA
+    lda current_sector
+    sta SPI_DATA
+    lda #1
+    sta SPI_DATA
+
+    rts
+
+.endproc
+
+.proc wait_for_data
+
+    stz wait_count
+    stz wait_count + 1
+.loop:
+    inc wait_count
+    bne +skip
+    inc wait_count + 1
+.skip:
+    lda SPI_DATA
+    cmp #$fe
+    bne -loop
+
+    rts
+.endproc
+
+; take the current file and cache the cluster chain
+.proc read_cluster_chain
+
+    stz current_fat_sector      ; ensures we read the fat
+    stz current_fat_sector + 1
+    stz current_fat_sector + 2
+    stz current_fat_sector + 3
+
+    ; store both in fat_sector ready for adjustment, and to the chain
+    lda file_cluster
+    sta fat_sector
+    and #$7f
+    sta offset
+
+    lda file_cluster + 1
+    sta fat_sector + 1
+
+    lda file_cluster + 2
+    sta fat_sector + 2
+
+    lda file_cluster + 3
+    sta fat_sector + 3
+
+    lda #<(cluster_chain + 4)    ; set temp pointer for the output
+    sta temp_pointer
+    lda #>(cluster_chain + 4)
+    sta temp_pointer + 1
+
+    ; -2
+    sec
+    lda file_cluster
+    sbc #2
+    sta cluster_chain
+
+    lda file_cluster + 1
+    sbc #0
+    sta cluster_chain + 1
+
+    lda file_cluster + 2
+    sbc #0
+    sta cluster_chain + 2
+
+    lda file_cluster + 3
+    sbc #0
+    sta cluster_chain + 3
+
+    ; multiple by the sectors per cluster
+    ldx sectors_per_cluster_shift
+    beq +skip
+.loop:
+    asl cluster_chain
+    rol cluster_chain + 1
+    rol cluster_chain + 2
+    rol cluster_chain + 3
+
+    dex
+    bne -loop
+
+.skip:
+
+    clc
+    lda cluster_chain
+    adc first_cluster_sector
+    sta cluster_chain
+
+    lda cluster_chain + 1
+    adc first_cluster_sector + 1
+    sta cluster_chain + 1
+
+    lda cluster_chain + 2
+    adc first_cluster_sector + 2
+    sta cluster_chain + 2
+
+    lda cluster_chain + 3
+    adc first_cluster_sector + 3
+    sta cluster_chain + 3
+
+
+
+    lda #01
+    sta cluster_count
+    stz cluster_count + 1
+
+    stz cluster_position
+    stz cluster_position + 1
+
+.main_loop:
+    ; set fat_sector to cluster >> 7, to find the sector index in the FAT.
+    ; bits 6-0 are then the index within, captured above in the offset variable
+    ldx #7
+.loop:
+    clc
+    ror fat_sector + 3
+    ror fat_sector + 2
+    ror fat_sector + 1
+    ror fat_sector
+    dex
+    bne -loop
+
+    clc
+    lda fat_sector
+    adc fat_begin_sector
+    sta fat_sector
+    lda fat_sector + 1
+    adc fat_begin_sector + 1
+    sta fat_sector + 1
+    lda fat_sector + 2
+    adc fat_begin_sector + 2
+    sta fat_sector + 2
+    lda fat_sector + 3
+    adc fat_begin_sector + 3
+    sta fat_sector + 3
+
+    jsr read_fat
+
+.search_loop:
+
+    ; offset * 4
+    lda offset
+    asl          ; offset is 0-127, so first shift could never set the carry
+    asl          ; if carry is set we're in the top 256
+
+    bcs high
+.low:
+    tax
+    lda current_data, x
+    sta cluster
+    lda current_data + 1, x
+    sta cluster + 1
+    lda current_data + 2, x
+    sta cluster + 2
+    lda current_data + 3, x
+    sta cluster + 3
+
+    jmp data_read
+
+.high:
+    tax
+    lda current_data + 0x100, x
+    sta cluster
+    lda current_data + 0x100 + 1, x
+    sta cluster + 1
+    lda current_data + 0x100 + 2, x
+    sta cluster + 2
+    lda current_data + 0x100 + 3, x
+    sta cluster + 3
+
+.data_read:
+.loop:
+    ; 0x0ffffff8 indicates the end of the chain
+    lda cluster
+    and #$f8
+    cmp #$f8
+    bne +next
+
+    lda cluster + 1
+    cmp #$ff
+    bne +next
+
+    lda cluster + 2
+    cmp #$ff
+    bne +next
+
+    lda cluster + 3
+    and #$0f
+    cmp #$0f
+    bne +next
+
+    ; reset the pointer as we'll use this every time we move up a cluster
+    lda #<cluster_chain
+    sta temp_pointer
+    lda #>cluster_chain
+    sta temp_pointer + 1
+
+    ; found!
+    rts
+.next:
+    ; set fat_sector then -2
+    sec
+    lda cluster
+    sta fat_sector
+    sbc #2
+    sta cluster
+
+    lda cluster + 1
+    sta fat_sector + 1
+    sbc #0
+    sta cluster + 1
+
+    lda cluster + 2
+    sta fat_sector + 2
+    sbc #0
+    sta cluster + 2
+
+    lda cluster + 3
+    sta fat_sector + 3
+    sbc #0
+    sta cluster + 3
+
+    ; multiple by the sectors per cluster
+    ldx sectors_per_cluster_shift
+    beq +skip
+.loop:
+    asl cluster
+    rol cluster + 1
+    rol cluster + 2
+    rol cluster + 3
+
+    dex
+    bne -loop
+.skip:
+    ; add on first_cluster_sector and store
+    clc
+    lda cluster
+    adc first_cluster_sector
+    sta (temp_pointer)
+    ldy #1
+    lda cluster + 1
+    adc first_cluster_sector + 1
+    sta (temp_pointer), y
+    iny
+    lda cluster + 2
+    adc first_cluster_sector + 2
+    sta (temp_pointer), y
+    iny
+    lda cluster + 3
+    adc first_cluster_sector + 3
+    sta (temp_pointer), y
+
+    inc cluster_count
+    bne +skip
+    inc cluster_count + 1
+.skip:
+
+    lda fat_sector
+    and #$7f
+    sta offset
+
+    clc
+    lda temp_pointer
+    adc #4
+    sta temp_pointer
+    lda temp_pointer + 1
+    adc #0
+    sta temp_pointer + 1
+
+    jmp -main_loop
+
+    .padvar uint cluster                ; current cluster, used to look up cluster in fat
+    .padvar uint fat_sector             ; cluster number * 4 / 128 or >> 5
+    .padvar byte offset                 ; 0x7f of cluster
+    .padvar uint current_fat_sector     ; current fat sector so we can optimise
+
+    ; reads fat_sector into memory
+    .proc read_fat
+
+        lda fat_sector
+        cmp current_fat_sector
+        bne load_fat
+        lda fat_sector + 1
+        cmp current_fat_sector + 1
+        bne load_fat
+        lda fat_sector + 1
+        cmp current_fat_sector + 1
+        bne load_fat
+        lda fat_sector + 1
+        cmp current_fat_sector + 1
+        bne load_fat
+
+        rts
+
+    .load_fat:
+        Deselect();
+        Select();
+
+    ; read current sector
+        lda #($40 | 17)     ; 17 is read single block
+        sta SPI_DATA
+        lda fat_sector + 3
+        sta current_fat_sector + 3
+        sta SPI_DATA
+        lda fat_sector + 2
+        sta current_fat_sector + 2
+        sta SPI_DATA
+        lda fat_sector + 1
+        sta current_fat_sector + 1
+        sta SPI_DATA
+        lda fat_sector
+        sta current_fat_sector
+        sta SPI_DATA
+        lda #1
+        sta SPI_DATA
+
+        jsr wait_for_data
+        jsr fill_current_data
+        rts
+    .endproc
+
+.endproc
+
+; also reads the two CRC bytes and deselects
+.proc fill_current_data
+    ldx #0
+.loop:
+    for(var i = 0; i < 16; i++)
+    {
+        lda SPI_DATA
+        sta current_data + @(i), x
+    }
+    txa
+    clc
+    adc #16
+    tax
+    beq +next
+    jmp -loop
+
+.next:
+.loop:
+    for(var i = 0; i < 16; i++)
+    {
+        lda SPI_DATA
+        sta current_data + @(i) + 0x100, x
+    }
+    txa
+    clc
+    adc #16
+    tax
+    beq +next
+    jmp -loop
+.next:
+    lda SPI_DATA
+    nop
+    nop
+    lda SPI_DATA
+
+    Deselect();
+    rts
+.endproc
+
+; reads the next sector, moving down the chain if necessary
+.proc read_next_sector
+
+    dec sectors_left
+    beq read_next_cluster
+
+    inc current_sector
+    bne +skip
+    inc current_sector + 1
+    bne +skip
+    inc current_sector + 2
+    bne +skip
+    inc current_sector + 3
+.skip:
+
+    jmp open_current_sector ; this will rts
+
+.read_next_cluster:
+
+    ; pointer is at the current position, so inc first
+    clc
+    lda temp_pointer
+    adc #4
+    sta temp_pointer
+    lda temp_pointer + 1
+    adc #0
+    sta temp_pointer + 1
+
+    lda (temp_pointer)
+    sta current_sector
+    ldy #1
+    lda (temp_pointer), y
+    sta current_sector + 1
+    iny
+    lda (temp_pointer), y
+    sta current_sector + 2
+    iny
+    lda (temp_pointer), y
+    sta current_sector + 3
+
+    inc cluster_position
+    bne +skip
+    inc cluster_position + 1
+.skip:
+
+    lda sectors_per_cluster
+    sta sectors_left
+
+    jmp open_current_sector ; this will rts
+
+.endproc
+
+; compares cluster_position vs length, sets carry if over
+.proc check_eof
+
+    lda cluster_position + 1
+    cmp cluster_count + 1
+    beq +next
+    rts
+
+.next:
+    lda cluster_position
+    cmp cluster_count
+    beq +error
+    rts
+
+.error:
+    sec
+    rts
+
+.endproc
+
+.proc snap_current_position
+
+    lda temp_pointer
+    sta snap_cluster_pointer
+    lda temp_pointer + 1
+    sta snap_cluster_pointer + 1
+
+    lda current_sector
+    sta snap_current_sector
+    lda current_sector + 1
+    sta snap_current_sector + 1
+    lda current_sector + 2
+    sta snap_current_sector + 2
+    lda current_sector + 3
+    sta snap_current_sector + 3
+
+    lda sectors_left
+    sta snap_sectors_left
+
+    lda cluster_position
+    sta snap_cluster_position
+    lda cluster_position + 1
+    sta snap_cluster_position + 1
+
+    rts
+
+.endproc
+
+.proc move_to_snap
+
+    lda snap_cluster_pointer
+    sta temp_pointer
+    lda snap_cluster_pointer + 1
+    sta temp_pointer + 1
+
+    lda snap_current_sector
+    sta current_sector
+    lda snap_current_sector + 1
+    sta current_sector + 1
+    lda snap_current_sector + 2
+    sta current_sector + 2
+    lda snap_current_sector + 3
+    sta current_sector + 3
+
+    lda snap_sectors_left
+    sta sectors_left
+
+    lda snap_cluster_position
+    sta cluster_position
+    lda snap_cluster_position + 1
+    sta cluster_position + 1
+
+    rts
+
+.endproc
+
+.proc deselect
+    lda SPI_CTRL
+    and #$fe
+    ora #4
+    sta SPI_CTRL
+
+    lda #$ff
+    sta SPI_DATA ; start auto tx to deselect
+
+    rts
+.endproc
+
+.proc select
+    lda SPI_CTRL
+    ora #$01 + 4
+    sta SPI_CTRL
+
+    rts
+.endproc
+
+
+void Select()
+{
+    jsr select
+}
+
+void Deselect()
+{
+    jsr deselect
+}
+};
+}
+}
+
+public override void Initialise()
+{
+    Setup();
+}
+
+public void Generate()
+{
+    if (Proc == null)
+    {
+        var fastDos = new FastDos();
+        fastDos.Build();
+    }
+
+    Proc();
+}

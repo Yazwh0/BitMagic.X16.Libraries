@@ -1,0 +1,5 @@
+*.BIN
+*.Lz4
+*.YM
+/bin
+/obj

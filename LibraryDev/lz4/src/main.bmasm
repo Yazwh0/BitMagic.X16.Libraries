@@ -1,0 +1,58 @@
+nuget K4os.Compression.LZ4, 1.3.8;
+using K4os.Compression.LZ4;
+using System.Text;
+
+import BM="bm.bmasm";
+import Init="Initialisation.bmasm";
+import Lz4="..\..\..\Libraries\Lz4\Lz4.bmasm";
+
+var input = Encoding.UTF8.GetBytes("LZ4 TEST START aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc LZ4-LZ4-LZ4-LZ4-LZ4-LZ4-LZ4-LZ4 The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. END-OF-BLOCK-123");
+
+;var input = TestData().ToArray();
+var compressed =  new byte[LZ4Codec.MaximumOutputSize(input.Length)];
+var length = LZ4Codec.Encode(input, 0, input.Length, compressed, 0, compressed.Length, LZ4Level.L12_MAX);
+Array.Resize(ref compressed, length);
+
+Lz4.Create().FromRam("Main:data").ToVram().WithReadLength(512).WithDebugging().Build();
+
+.segment Bss, $400
+.segment Main
+
+BM.X16Header();
+	sei
+	cld
+	nop
+
+	ldx #<@(length + 1)
+	ldy #>@(length + 1)
+	jsr Lz4:decompress_init
+
+	Lz4.ChangeToVram(0x0000);
+
+.decompress_loop:
+	jsr Lz4:decompress
+	bcc decompress_loop
+
+	stp
+.loop:
+	jmp -loop
+
+Init.Setup();
+Lz4.Generate();
+.scope Main
+
+.align 16
+.data:
+	BM.Bytes(compressed);
+
+.constvar string output_data = output
+.align 16
+.output:
+
+IEnumerable<byte> TestData()
+{
+	for(var i = 0; i < 1024 * 2; i++)
+	{
+		yield return (byte)((i >> 1) % 256);
+	}
+}
