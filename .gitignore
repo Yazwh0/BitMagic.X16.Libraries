@@ -1,5 +1,7 @@
 *.BIN
 *.Lz4
 *.YM
-/bin
-/obj
+/**/bin
+/**/obj
+/**/.vs
+*.zsm
