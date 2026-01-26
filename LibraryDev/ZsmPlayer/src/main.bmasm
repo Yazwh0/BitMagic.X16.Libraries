@@ -2,7 +2,10 @@ import BM="bm.bmasm";
 import Init="Initialisation.bmasm";
 import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmCompPlayer.bmasm";
 
-ZsmPlayer.Create().WithPsg().Build();
+ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(2).Build();
+
+!segment ZP $02
+!segment Main
 
 BM.X16Header();
 	cld
@@ -28,9 +31,6 @@ BM.X16Header();
 
 	lda #50
 	sta IRQLINE_L
-
-    lda #2
-    sta RAM_BANK
 
 	jsr ZsmPlayer:init_player
 
@@ -77,5 +77,6 @@ BM.X16Header();
 
 ; ----- Place library code here
 Init.Setup();
-BM.Bytes("SONG PLAYER >>>>");
+BM.Bytes("     ZSM PLAYER >>>>>");
 ZsmPlayer.Generate();
+BM.Bytes("<<<<<<<<");
