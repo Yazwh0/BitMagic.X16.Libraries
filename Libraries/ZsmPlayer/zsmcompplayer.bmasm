@@ -247,7 +247,7 @@ if (UsesYm)
 
     dey
     bne -ym_loop
-    jmp -tick_loop
+    bra -tick_loop
 }
 
 if (UsesExtCommands)
@@ -261,7 +261,7 @@ if (UsesExtCommands)
 .:  beq -tick_loop
     jsr get_byte
     dex
-    jmp -
+    bra -
 }
 
 .exit:
@@ -303,13 +303,9 @@ else
     lda #>$a000-1
     sta get_line_byte:line_pointer + 1
 }
-}
-else
-{
-    jsr init_player
-}
     rts
-
+}
+; falls through
 .endproc
 
 .proc init_player
