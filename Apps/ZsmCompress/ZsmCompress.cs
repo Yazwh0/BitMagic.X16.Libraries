@@ -1,12 +1,110 @@
-using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
+﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 
 namespace ZsmCompress;
-public sealed record ZsmHeader(
+
+public static class ZsmCompress
+{
+    public static byte[] Compress(byte[] inputData, int bank, int address, out int dictionarySize, out int dataSize)
+    {
+        var blocks = new List<ZsmBlock>();
+        var parser = new ZsmParser(1, false);
+        var (_, parsedBlocks) = parser.ParseStream(new MemoryStream(inputData));
+        blocks = parsedBlocks ?? new List<ZsmBlock>();
+
+        Dictionary<string, (int Count, int Index, int Address)> hashCounts = new();
+        var hashSize = 0;
+        List<int> zsmBlocks = new();
+
+        address = bank << 16 + address; // 0x02a000;
+
+        address = AddAddress(address, blocks.Count * 3); // move the address on away from the pointers
+
+        foreach (var i in blocks)
+        {
+            if (hashCounts.ContainsKey(i.DataHashHex))
+            {
+                var hashCount = hashCounts[i.DataHashHex];
+                zsmBlocks.Add(hashCount.Address);
+
+                hashCount.Count++;
+                hashCounts[i.DataHashHex] = hashCount;
+            }
+            else
+            {
+                i.Address = address;
+                zsmBlocks.Add(address);
+
+                hashCounts[i.DataHashHex] = (1, hashCounts.Count, address);
+                hashSize += i.Data.Length;
+
+                address = AddAddress(address, i.Length);
+            }
+        }
+
+        dictionarySize = blocks.Count * 3;
+        dataSize = hashSize;
+
+
+        return CreatZsmComp(zsmBlocks, hashCounts, blocks);
+    }
+
+    private static int AddAddress(int address, int length)
+    {
+        var bank = (address & 0xFF0000) >> 16;
+        var rawAddress = address & 0x00FFFF;
+
+        rawAddress -= 0xa000;
+
+        rawAddress += length;
+        while (rawAddress > 0x2000)
+        {
+            rawAddress -= 0x2000;
+            bank++;
+        }
+
+        rawAddress += 0xa000;
+
+        return (bank << 16) | rawAddress;
+    }
+
+    // Writes the pointer table followed by the unique blocks in dictionary order.
+    // - Each entry in `zsmBlocks` is written as 3 bytes little-endian (low, mid, high).
+    // - Unique blocks are written in ascending Index order from `hashCounts`.
+    private static byte[] CreatZsmComp(List<int> zsmBlocks, Dictionary<string, (int Count, int Index, int Address)> hashCounts, List<ZsmBlock> blocks)
+    {
+        if (zsmBlocks is null) throw new ArgumentNullException(nameof(zsmBlocks));
+        if (hashCounts is null) throw new ArgumentNullException(nameof(hashCounts));
+        if (blocks is null) throw new ArgumentNullException(nameof(blocks));
+
+        using var outputStream = new MemoryStream();
+
+        // Write pointer table: each pointer as 3 bytes little-endian
+        foreach (var ptr in zsmBlocks)
+        {
+            var value = ptr - 1;
+            outputStream.WriteByte((byte)(value & 0xFF));
+            outputStream.WriteByte((byte)((value >> 8) & 0xFF));
+            outputStream.WriteByte((byte)((value >> 16) & 0xFF));
+        }
+
+        // Write unique blocks in order of their Index value (ascending)
+        foreach (var kv in hashCounts.OrderBy(kv => kv.Value.Index))
+        {
+            var address = kv.Value.Address;
+
+            // Prefer finding block by Address (unique blocks had Address assigned).
+            var block = blocks.First(b => b.Address == address);
+
+            outputStream.Write(block.Data, 0, block.Data.Length);
+        }
+
+        return outputStream.ToArray();
+    }
+}
+
+internal sealed record ZsmHeader(
     byte Version,
     int LoopPoint,       // 24-bit little-endian
     int PcmOffset,       // 24-bit little-endian (0 = no PCM)
@@ -16,7 +114,7 @@ public sealed record ZsmHeader(
 );
 
 [DebuggerDisplay("Length={Length} Hash={DataHashHex,nq}")]
-public sealed record ZsmBlock(
+internal sealed record ZsmBlock(
     long Offset,     // file offset where block starts (relative to file start)
     int Length,      // length in bytes
     byte[] Data,     // raw bytes of the music stream for this block (includes trailing pause/end marker)
@@ -49,7 +147,7 @@ public sealed record ZsmBlock(
 /// by setting includeExtCmds = false. The parser will still consume those bytes from the stream (advancing offsets),
 /// but they will not be written into the block byte arrays.
 /// </summary>
-public sealed class ZsmParser
+internal sealed class ZsmParser
 {
     private readonly int _minPauseTicks;
     private readonly bool _includeExtCmds;

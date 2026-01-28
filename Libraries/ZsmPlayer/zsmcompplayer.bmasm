@@ -217,7 +217,7 @@ if (UsesExtCommands || UsesYm)
 
     jsr get_byte
     sta DATA0
-    jmp -tick_loop
+    bra -tick_loop
 }
 
 .ext_or_ym:

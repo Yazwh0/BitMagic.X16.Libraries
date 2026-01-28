@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ZsmCompress": {
+      "commandName": "Project",
+      "commandLineArgs": "-i ..\\..\\..\\AUDIO.ZSM -o ..\\..\\..\\AUDIO.ZSMCOMP.BIN -b 2"
+    }
+  }
+}
