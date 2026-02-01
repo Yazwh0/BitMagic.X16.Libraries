@@ -75,6 +75,128 @@ In its smallest form, that only handles PSG, the compressed playback code is 162
 
 The code and the way it is built is to optimize for the smallest code size as we do not include features that we do not need. This is why the library is only available as code, not as an object file or other means of sharing the binary.
 
+### Example
+
+The code generated for a player that supports PSG only, Ram Bank 2 and makes use of 4 bytes in the ZP to minimise size is as below.
+
+The generated code can always be viewed via setting `saveGeneratedBmasm` to true in the `project.json`.
+
+``` asm
+.segment ZP scope:ZsmPlayer
+.padvar ushort data_pointer
+.padvar ushort line_pointer
+.endsegment
+
+.scope ZsmPlayer
+.constvar uint psg_start = 0x1f9c0
+
+.proc get_byte
+    inc data_pointer
+    bne +skip
+    inc data_pointer + 1
+    lda data_pointer + 1
+    cmp #$c0
+    bne +skip
+    inc RAM_BANK
+    lda #$a0
+    sta data_pointer + 1
+    stz data_pointer
+
+.skip:
+    lda (data_pointer)
+    rts
+.endproc
+
+.proc get_line_byte
+    inc line_pointer
+    bne +skip
+    inc line_pointer + 1
+    lda line_pointer + 1
+    cmp #$c0
+    bne +skip
+    inc RAM_BANK
+    lda #$a0
+    sta line_pointer + 1
+    stz line_pointer
+
+.skip:
+    lda (line_pointer)
+    rts
+.endproc
+
+.proc tick
+    lda countdown: #$00
+    beq tick_setup
+    dec countdown
+    rts
+
+.tick_setup:
+    lda line_bank: #$ab
+    sta RAM_BANK
+    jsr get_line_byte
+    sta data_pointer
+    jsr get_line_byte
+    sta data_pointer + 1
+    jsr get_line_byte
+    ldx RAM_BANK
+    stx line_bank
+    sta RAM_BANK
+    ldy ADDRx_H
+    sty addr_h
+    ldy ADDRx_M
+    sty addr_m
+    ldy ADDRx_L
+    sty addr_l
+    ldy #^psg_start
+    sty ADDRx_H
+    ldy #>psg_start
+    sty ADDRx_M
+
+.tick_loop:
+    jsr get_byte
+    bmi exit
+
+.vera:
+    clc
+    adc #<psg_start
+    sta ADDRx_L
+    jsr get_byte
+    sta DATA0
+    bra -tick_loop
+
+.ext_or_ym:
+
+.exit:
+    ldy addr_h: #$ab
+    sty ADDRx_H
+    ldy addr_m: #$ab
+    sty ADDRx_M
+    ldy addr_l: #$ab
+    sty ADDRx_L
+    and #$7f
+    beq all_done
+    dec
+    sta countdown
+
+.step_done:
+    rts
+
+.all_done:
+.endproc
+
+.proc init_player
+    lda #2
+    sta tick:line_bank
+    lda #<$a000-1
+    sta line_pointer
+    lda #>$a000-1
+    sta line_pointer + 1
+    rts
+.endproc
+
+.endscope
+```
+
 ## License
 
 The playback code is licensed under the MIT License. See the license file for more info.
