@@ -14,11 +14,11 @@ The two playback routines are not compatible, but share similar signatures when 
 
 ## How to Generate the Player
 
-By using C# commands, we can build a custom ZSM Player for the tracks that we want to play back.
+By using C# commands, you can build a custom ZSM Player for the tracks that we want to play back.
 
-We need to know if the tracks use PSG, YM, and Extended Commands. If a track has any of these features but the code isn't enabled, then the playback will crash. We do this to minimize the size of the playback code. Why test and handle for YM playback if the track is only PSG?!
+The playback generated needs to know if the tracks use PSG, YM, and Extended Commands. If a track has any of these features but the code isn't enabled, then the playback will crash. We do this to minimize the size of the playback code. Why test and handle for YM playback if the track is only PSG?!
 
-The following code shows how to build code that supports PSG, YM, and extended commands:
+The following code shows the possible options to build the code with. It is possible to omit any of the calls to produce code that is tailored to your requirements.
 
 ```c#
 ZsmPlayer.Create()
