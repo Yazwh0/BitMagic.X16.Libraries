@@ -1,9 +1,6 @@
 ﻿using CommandLine;
-using CommandLine.Text;
-using System.Security.AccessControl;
 
 namespace ZsmCompress;
-
 
 class Program
 {

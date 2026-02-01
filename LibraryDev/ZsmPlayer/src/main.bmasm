@@ -2,7 +2,16 @@ import BM="bm.bmasm";
 import Init="Initialisation.bmasm";
 import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmCompPlayer.bmasm";
 
-ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(2).Build();
+using ZsmCompress;
+using System.IO;
+
+include "../../../apps/ZsmCompress/ZsmCompress.cs";
+
+var zsmRamBank = 2;
+var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
+File.WriteAllBytes(@"../AUDCOMP.BIN", zsmCompFile);
+
+ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).Build();
 
 !segment ZP $02
 !segment Main

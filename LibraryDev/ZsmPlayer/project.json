@@ -12,6 +12,8 @@
     "binFolder": "bin",
     "displaySegments": true,
     "saveGeneratedBmasm": true,
+    "saveGeneratedTemplate": true,
+    "savePreGeneratedTemplate": true,
     "rebuild": true
   },
   "sdCardFiles": [

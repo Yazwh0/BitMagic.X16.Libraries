@@ -6,3 +6,6 @@
 /**/.vs
 *.zsm
 *.zip
+!AUDIO.BIN
+!AUDCOMP.BIN
+

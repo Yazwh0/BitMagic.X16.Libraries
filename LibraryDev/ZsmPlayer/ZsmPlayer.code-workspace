@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../Libraries/ZsmPlayer"
+		},
+		{
+			"path": "../../Apps/ZsmCompress"
 		}
 	],
 	"settings": {}

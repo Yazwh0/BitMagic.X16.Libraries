@@ -1,10 +1,17 @@
 ﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+// Needed for calling from BMASM
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security;
 
 namespace ZsmCompress;
 
-public static class ZsmCompress
+public static class ZsmCompressor
 {
     public static byte[] Compress(byte[] inputData, int bank, int address, out int dictionarySize, out int dataSize)
     {
@@ -132,7 +139,7 @@ internal sealed record ZsmBlock(
     private static byte[] ComputeSha256Hash(byte[]? data)
     {
         if (data is null || data.Length == 0) return Array.Empty<byte>();
-        using var sha = SHA256.Create();
+        using var sha = System.Security.Cryptography.SHA256.Create();
         return sha.ComputeHash(data);
     }
 }
@@ -142,7 +149,7 @@ internal sealed record ZsmBlock(
 /// A "pause" here is a Delay command (0x81-0xFF) whose ticks >= minPauseTicks, or EOF (0x80).
 /// The parser consumes the ZSM header and the music stream up to the 0x80 marker. PCM header/data after 0x80 are not interpreted
 /// by the block splitting but are left unread by ParseStream (caller can continue reading if desired).
-/// 
+///
 /// New: The parser can optionally exclude EXTCMD blocks (0x40 and following bytes) from the returned block data
 /// by setting includeExtCmds = false. The parser will still consume those bytes from the stream (advancing offsets),
 /// but they will not be written into the block byte arrays.

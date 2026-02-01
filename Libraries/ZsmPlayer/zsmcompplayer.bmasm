@@ -317,7 +317,7 @@ if (RamBank == -1)
 }
 else
 {
-    lda #@(RamBank)
+    lda #@(RamBank)     ; Ram Bank
 }
     sta tick:line_bank
 
