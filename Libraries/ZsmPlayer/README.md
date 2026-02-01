@@ -48,7 +48,7 @@ ZsmPlayer:**tick**
 
 Reads one line from the ZSM file and plays it. Ideally called once a frame.
 
-An example of how to use the player is within the [../../LibraryDev/ZsmPlayer](example workspace).
+An example of how to use the player is within the [example workspace](../../LibraryDev/ZsmPlayer).
 
 ## ZSM Compress
 
@@ -63,7 +63,7 @@ var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsm
 File.WriteAllBytes(@"../AUDCOMP.BIN", zsmCompFile);
 ```
 
-Or via the command line application in the [../../Apps/ZsmCompress](Apps\ZsmCompress) folder.
+Or via the command line application in the [Apps\ZsmCompress](../../Apps/ZsmCompress) folder.
 
 The file generated is not a general purpose file as the address of each line is stored within. This is to improve performance, as the location of where the player needs to look is built into the data stream. It is vital that the address and bank passed into the compressor is the same as the ZsmPlayer that is built.
 

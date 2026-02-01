@@ -39,7 +39,7 @@ class Program
                 Console.WriteLine("Done.");
 
                 Console.Write("Compressing... ");
-                var compressedData = ZsmCompress.Compress(inputData, arguments.Bank, arguments.Address, out var dictionarySize, out var dataSize);
+                var compressedData = ZsmCompressor.Compress(inputData, arguments.Bank, arguments.Address, out var dictionarySize, out var dataSize);
                 Console.WriteLine("Done.");
 
                 Console.WriteLine($"Input Size      : {inputData.Length:#,##0} bytes.");
