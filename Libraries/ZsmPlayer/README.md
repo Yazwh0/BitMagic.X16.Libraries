@@ -48,7 +48,7 @@ ZsmPlayer:**tick**
 
 Reads one line from the ZSM file and plays it. Ideally called once a frame.
 
-An example of how to use the player is within the [example workspace](../../LibraryDev/ZsmPlayer).
+An example of how to use the player is within the [../../LibraryDev/ZsmPlayer](example workspace).
 
 ## ZSM Compress
 
