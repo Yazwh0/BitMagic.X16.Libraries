@@ -1,0 +1,87 @@
+import BM="bm.bmasm";
+import Init="Initialisation.bmasm";
+import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmPlayer.bmasm";
+
+var zsmRamBank = 2;
+
+ZsmPlayer.Create().WithPsg().UseZp().Build();
+
+!segment ZP $02
+!segment Main
+
+BM.X16Header();
+	cld
+	sei
+
+	lda DC_VIDEO
+	and #$08		; turn everything off
+	sta DC_VIDEO
+
+	lda #1 << 1
+	sta CTRL
+	lda #0
+	sta DC_VSTOP
+
+	stz CTRL
+
+	jsr load_music
+
+	lda #$02
+	sta IEN
+	lda ISR
+	sta ISR
+
+	lda #50
+	sta IRQLINE_L
+
+    lda #2
+    sta RAM_BANK
+
+	jsr ZsmPlayer:init_player
+
+.loop:
+	wai
+	lda ISR
+	sta ISR
+
+	lda #1
+	sta DC_BORDER
+	jsr ZsmPlayer:tick
+	stz DC_BORDER
+	jmp -loop
+
+
+.proc load_music
+    var songFilename = "AUDIO.BIN";
+    .const loadpos = 0xa000
+
+    lda #@(songFilename.Length)
+    ldx #<filename
+    ldy #>filename
+    jsr SETNAM
+
+    lda #2
+    ldx #8
+    ldy #2
+    jsr SETLFS
+
+    lda #2
+    sta RAM_BANK
+
+    lda #0
+    ldx #<loadpos
+    ldy #>loadpos
+    jsr LOAD
+
+	rts
+
+.filename:
+    BM.Bytes(songFilename);
+
+.endproc
+
+; ----- Place library code here
+Init.Setup();
+BM.Bytes("     ZSM PLAYER >>>>>");
+ZsmPlayer.Generate();
+BM.Bytes("<<<<<<<<");

@@ -2,10 +2,11 @@
   "files": [
     {
       "type": "bitmagic",
-      "filename": "src/main.bmasm"
+      "filename": "src/zsmcomp.bmasm"
     }
   ],
   "outputFolder": "app",
+  "autobootFile": "zsmcomp.prg",
   "memoryFillValue": 192,
   "windowScale": 2,
   "compileOptions": {
@@ -20,6 +21,10 @@
     {
       "source": "AUDCOMP.BIN",
       "destination": "AUDCOMP.BIN"
+    },
+    {
+      "source": "AUDIO.BIN",
+      "destination": "AUDIO.BIN"
     }
   ],
   "sdCardOutput": "zsmcomp.sdcard.bin.zip"

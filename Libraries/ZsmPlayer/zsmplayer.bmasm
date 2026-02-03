@@ -18,6 +18,8 @@ public class ZsmPlayer
     private bool UsesYm = false;
     private bool UsesPsg = false;
     private bool UsesExtCommands = false;
+    private bool UsingZp = false;
+    private int RamBank = -1;
 
     private bool HasOverrides = false;
 
@@ -42,6 +44,20 @@ public class ZsmPlayer
         return this;
     }
 
+    public ZsmPlayer UseZp()
+    {
+        UsingZp = true;
+        HasOverrides = true;
+        return this;
+    }
+
+    public ZsmPlayer UseRamBank(int bank)
+    {
+        RamBank = bank;
+        HasOverrides = true;
+        return this;
+    }
+
     public void Build()
     {
         Proc = () =>
@@ -52,28 +68,45 @@ public class ZsmPlayer
             UsesYm = true;
             UsesPsg = true;
             UsesExtCommands = true;
+            UsingZp = false;
         }
+
+if (UsingZp)
+{
+.segment ZP scope:ZsmPlayer
+    .padvar ushort data_pointer
+.endsegment
+}
 
 .scope ZsmPlayer
 .constvar uint psg_start = 0x1f9c0
 
 .proc get_byte
 
-    inc read_position
+    inc data_pointer
     bne +skip
-    inc read_position + 1
-    lda read_position + 1
+    inc data_pointer + 1
+    lda data_pointer + 1
     cmp #$c0
     bne +skip
 
-    inc RAM_BANK
+    lda RAM_BANK
+    inc
+    sta RAM_BANK
+    sta tick:ram_bank
     lda #$a0
-    sta read_position + 1
-    stz read_position
+    sta data_pointer + 1
+    stz data_pointer
 
 .skip:
-    lda read_position: $a00f        ; updated above, starting a byte before the end of the header, do like this so flags are right
-
+if (UsingZp)
+{
+    lda (data_pointer)
+}
+else
+{
+    lda data_pointer: $a00f        ; updated above, starting a byte before the end of the header, do like this so flags are right
+}
     rts
 
 .endproc
@@ -81,10 +114,14 @@ public class ZsmPlayer
 .proc tick
 
     lda countdown: #$00
-    beq tick_loop
+    beq tick_setup
 
     dec countdown
     rts
+
+.tick_setup:
+    lda ram_bank: #$ab
+    sta RAM_BANK
 
 .tick_loop:
     jsr get_byte
@@ -110,7 +147,10 @@ if (UsesPsg)
     ; 0x0100_0000 - Ext Command
     ; 0x01xx_xxxx - YM write
 
+if (UsesExtCommands || UsesYm)
+{
     tax
+}
 if (UsesPsg && (UsesExtCommands || UsesYm))
 {
     and #0b0100_0000
@@ -121,13 +161,16 @@ if (UsesPsg)
 {
 .vera:
     clc
+if (UsesExtCommands || UsesYm)
+{
     txa
+}
     adc #<psg_start
     sta ADDRx_L
 
     jsr get_byte
     sta DATA0
-    jmp -tick_loop
+    bra -tick_loop
 }
 
 .ext_or_ym:
@@ -157,7 +200,7 @@ if (UsesYm)
 
     dey
     bne -ym_loop
-    jmp -tick_loop
+    bra -tick_loop
 }
 
 if (UsesExtCommands)
@@ -171,7 +214,7 @@ if (UsesExtCommands)
 .:  beq -tick_loop
     jsr get_byte
     dex
-    jmp -
+    bra -
 }
 
 .exit:
@@ -195,25 +238,57 @@ if (UsesPsg)
 
 .all_done:
     ; loop or flag or whatever
-    lda ram_bank: #$00
-    sta RAM_BANK
-    lda #<$a00f
-    sta get_byte:read_position
-    lda #>$a00f
-    sta get_byte:read_position + 1
-    rts
+if (RamBank == -1)
+{
+    lda done_ram_bank: #$00
+    sta tick:ram_bank
 
+    if (UsingZp)
+    {
+    lda #<$a00f
+    sta data_pointer
+    lda #>$a00f
+    sta data_pointer + 1
+    }
+    else
+    {
+    lda #<$a00f
+    sta get_byte:data_pointer
+    lda #>$a00f
+    sta get_byte:data_pointer + 1
+    }
+    rts
+}
+; falls though
 .endproc
 
 .proc init_player
 
+if (RamBank == -1)
+{
     lda RAM_BANK
     sta tick:ram_bank
+    sta tick:done_ram_bank
+}
+else
+{
+    lda #@(RamBank)     ; Ram Bank
+    sta tick:ram_bank
+}
+
+if (UsingZp)
+{
+    lda #<$a00f
+    sta data_pointer
+    lda #>$a00f
+    sta data_pointer + 1
+}
+
     rts
 
 .endproc
 
-.endsegment
+.endscope
         };
     }
 }

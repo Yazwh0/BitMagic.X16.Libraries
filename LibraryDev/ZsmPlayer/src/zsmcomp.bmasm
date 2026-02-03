@@ -8,8 +8,9 @@ using System.IO;
 include "../../../apps/ZsmCompress/ZsmCompress.cs";
 
 var zsmRamBank = 2;
+
 var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
-File.WriteAllBytes(@"../AUDCOMP.BIN", zsmCompFile);
+File.WriteAllBytes(@"../AUDCOMPX.BIN", zsmCompFile);
 
 ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).Build();
 

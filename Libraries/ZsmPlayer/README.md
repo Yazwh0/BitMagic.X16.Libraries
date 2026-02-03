@@ -71,7 +71,7 @@ The file generated is not a general-purpose file as the address of each line is 
 
 ## Code
 
-In its smallest form, that only handles PSG, the compressed playback code is 162 bytes.
+In its smallest form, that only handles PSG and utilises ZP, the compressed playback code is 162 bytes. The standard player is only 127 bytes.
 
 The code and the way it is built is to optimize for the smallest code size as we do not include features that we do not need. This is why the library is only available as code, not as an object file or other means of sharing the binary.
 
