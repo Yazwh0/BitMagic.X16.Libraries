@@ -2,11 +2,11 @@
   "files": [
     {
       "type": "bitmagic",
-      "filename": "src/tiny.bmasm"
+      "filename": "src/tinier.bmasm"
     }
   ],
   "outputFolder": "app",
-  "autobootFile": "TINY.PRG",
+  "autobootFile": "TINIER.PRG",
   "memoryFillValue": 192,
   "windowScale": 2,
   "compileOptions": {

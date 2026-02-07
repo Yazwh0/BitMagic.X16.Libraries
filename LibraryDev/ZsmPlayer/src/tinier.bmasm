@@ -8,9 +8,9 @@ using System.IO;
 include "../../../apps/ZsmCompress/ZsmCompress.cs";
 
 var zsmRamBank = 2;
-
+var zsmCompFilename = "AUDCOMP.BIN";
 var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
-File.WriteAllBytes(@"../AUDCOMP.BIN", zsmCompFile);
+File.WriteAllBytes(@$"../{zsmCompFilename}", zsmCompFile);
 
 ZsmTinier.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().WithExtCommands().Build();
 
@@ -57,10 +57,9 @@ BM.X16Header();
 
 
 .proc load_music
-    var songFilename = "AUDCOMP.BIN";
     .const loadpos = 0xa000
 
-    lda #@(songFilename.Length)
+    lda #@(zsmCompFilename.Length)
     ldx #<filename
     ldy #>filename
     jsr SETNAM
@@ -81,7 +80,7 @@ BM.X16Header();
 	rts
 
 .filename:
-    BM.Bytes(songFilename);
+    BM.Bytes(zsmCompFilename);
 
 .endproc
 
