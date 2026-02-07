@@ -7,12 +7,14 @@ using System.IO;
 
 include "../../../apps/ZsmCompress/ZsmCompress.cs";
 
+; -- Compress ZSM binary
 var zsmRamBank = 2;
 var zsmCompFilename = "AUDCOMP.BIN";
 var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
 File.WriteAllBytes(@$"../{zsmCompFilename}", zsmCompFile);
 
-ZsmTinier.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().WithExtCommands().Build();
+; -- Setup ZsmTinier for this specific trade
+ZsmTinier.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).Build();
 
 !segment ZP $02
 !segment Main
