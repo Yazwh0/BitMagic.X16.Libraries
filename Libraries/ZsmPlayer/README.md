@@ -40,7 +40,7 @@ ZsmPlayer.Create()
 
 `.UseRamBank` sets the bank directly within the code, saving a handful of CPU cycles. If this is not set, it will use the current RAM bank when `init_player` is called.
 
-And then later where you want the playback code to go:
+And then to place the generated code use:
 
 ```c#
 ZsmPlayer.Generate();
