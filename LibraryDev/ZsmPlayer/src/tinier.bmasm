@@ -13,7 +13,7 @@ var zsmCompFilename = "AUDCOMP.BIN";
 var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
 File.WriteAllBytes(@$"../{zsmCompFilename}", zsmCompFile);
 
-; -- Setup ZsmTinier for this specific trade
+; -- Setup ZsmTinier for this specific track
 ZsmTinier.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).Build();
 
 !segment ZP $02

@@ -1,10 +1,11 @@
 import BM="bm.bmasm";
 import Init="Initialisation.bmasm";
-import ZsmPlayer="../../../Libraries/ZsmPlayer/zsmtiny.bmasm";
+import ZsmTiny="../../../Libraries/ZsmPlayer/zsmtiny.bmasm";
 
 var zsmRamBank = 2;
 
-ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().Build();
+; -- Setup ZsmTiny for this specific track
+ZsmTiny.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().Build();
 
 !segment ZP $02
 !segment Main
@@ -84,5 +85,5 @@ BM.X16Header();
 Init.Setup();
 .align 16
 BM.Bytes("ZSM PLAYER >>>>>");
-ZsmPlayer.Generate();
+ZsmTiny.Generate();
 BM.Bytes("<<<<<<<<");
