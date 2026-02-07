@@ -2,11 +2,11 @@
   "files": [
     {
       "type": "bitmagic",
-      "filename": "src/zsmcomp.bmasm"
+      "filename": "src/tiny.bmasm"
     }
   ],
   "outputFolder": "app",
-  "autobootFile": "zsmcomp.prg",
+  "autobootFile": "TINY.PRG",
   "memoryFillValue": 192,
   "windowScale": 2,
   "compileOptions": {

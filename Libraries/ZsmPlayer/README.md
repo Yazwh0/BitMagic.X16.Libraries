@@ -1,16 +1,24 @@
-# ZSM Player
+# ZSM Tiny and ZSM Tinier
 
-The ZSM Player is a ZSM playback routine that is optimized for size and speed. It currently supports PSG, YM, and the extended commands. It does not currently support PCM. Extended command support is there in that they can occur in the ZSM file, but will be ignored.
+The ZSM Tiny is a ZSM playback routine that is optimized for size and speed. It currently supports PSG, YM, and the extended commands. It does not currently support PCM. Extended command support is there in that they can occur in the ZSM file, but will be ignored.
 
 The timing of the playback is up to the caller. It is recommended that `tick` is called once a frame for 60 fps playback.
 
 ## Versions
 
-There are two versions of the player:
-- `zsmplayer.bmasm`: The standard import for a standard ZSM file.
-- `zsmcompplayer.bmasm`: For a custom 'compressed' version of the ZSM format.
+There are two versions of the player, _Tiny_ and _Tinier_:
+- `zsmtiny.bmasm`: The standard import for a standard ZSM file.
+- `zsmtinier.bmasm`: For a custom 'compressed' version of the ZSM format.
 
-The two playback routines are not compatible, but share similar signatures when defining their playback code characteristics. *(Note: This will be unified later.)*
+The two playback routines are not compatible, but share the same signature when defining their playback code characteristics.
+
+## Examples
+
+In this repository there are two testing files in the  'library development' folder.
+
+The `project.json` will need to be altered to run each one. The filename and optionally the autoboot file need to be changed
+
+Either `src/tiny.bmasm` and `TINY.PRG` or `src/tinier.bmasm` and `TINIER.PRG`.
 
 ## How to Generate the Player
 
@@ -71,9 +79,18 @@ The file generated is not a general-purpose file as the address of each line is 
 
 ## Code
 
-In its smallest form, that only handles PSG and utilises ZP, the compressed playback code is 162 bytes. The standard player is only 127 bytes.
+In its smallest form, that only handles PSG and utilises ZP, the compressed playback code is 163 bytes. The standard player is only 127 bytes.
 
-The code and the way it is built is to optimize for the smallest code size as we do not include features that we do not need. This is why the library is only available as code, not as an object file or other means of sharing the binary.
+### Size vs Options
+
+Player and the player size change in bytes per option. The base size is just with PSG and RAM bank not specified.
+
+| Version | Size | ZP | RamBank | YM | Ext |
+| ------- | ---- | -- | ------- | -- | --- |
+| Tinier | 198 bytes | -18 | -17 | +30 | +34 |
+| Tiny | 143 bytes | 0 | -17 | +30 | +34 |
+
+The way the code is built is to optimize for the smallest code size by ensuring we do not include features that are not needed. This is why the library is only available as code, not as an object file or other means of sharing the binary.
 
 ### Example
 

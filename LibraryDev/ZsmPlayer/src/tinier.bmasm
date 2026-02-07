@@ -1,6 +1,6 @@
 import BM="bm.bmasm";
 import Init="Initialisation.bmasm";
-import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmCompPlayer.bmasm";
+import ZsmTinier="../../../Libraries/ZsmPlayer/zsmtinier.bmasm";
 
 using ZsmCompress;
 using System.IO;
@@ -10,9 +10,9 @@ include "../../../apps/ZsmCompress/ZsmCompress.cs";
 var zsmRamBank = 2;
 
 var zsmCompFile = ZsmCompressor.Compress(File.ReadAllBytes(@"../AUDIO.BIN"), zsmRamBank, 0xa000, out var dictionarySize, out var dataSize);
-File.WriteAllBytes(@"../AUDCOMPX.BIN", zsmCompFile);
+File.WriteAllBytes(@"../AUDCOMP.BIN", zsmCompFile);
 
-ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).Build();
+ZsmTinier.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().WithExtCommands().Build();
 
 !segment ZP $02
 !segment Main
@@ -88,5 +88,5 @@ BM.X16Header();
 ; ----- Place library code here
 Init.Setup();
 BM.Bytes("     ZSM PLAYER >>>>>");
-ZsmPlayer.Generate();
+ZsmTinier.Generate();
 BM.Bytes("<<<<<<<<");

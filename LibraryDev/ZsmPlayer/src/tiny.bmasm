@@ -4,7 +4,7 @@ import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmPlayer.bmasm";
 
 var zsmRamBank = 2;
 
-ZsmPlayer.Create().WithPsg().UseZp().Build();
+ZsmPlayer.Create().WithPsg().UseZp().UseRamBank(zsmRamBank).WithYm().Build();
 
 !segment ZP $02
 !segment Main
@@ -82,6 +82,7 @@ BM.X16Header();
 
 ; ----- Place library code here
 Init.Setup();
-BM.Bytes("     ZSM PLAYER >>>>>");
+.align 16
+BM.Bytes("ZSM PLAYER >>>>>");
 ZsmPlayer.Generate();
 BM.Bytes("<<<<<<<<");

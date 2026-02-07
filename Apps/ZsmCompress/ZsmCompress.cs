@@ -15,16 +15,15 @@ public static class ZsmCompressor
 {
     public static byte[] Compress(byte[] inputData, int bank, int address, out int dictionarySize, out int dataSize)
     {
-        var blocks = new List<ZsmBlock>();
         var parser = new ZsmParser(1, false);
         var (_, parsedBlocks) = parser.ParseStream(new MemoryStream(inputData));
-        blocks = parsedBlocks ?? new List<ZsmBlock>();
+        var blocks = parsedBlocks ?? new List<ZsmBlock>();
 
-        Dictionary<string, (int Count, int Index, int Address)> hashCounts = new();
+        var hashCounts = new Dictionary<string, (int Count, int Index, int Address)> ();
         var hashSize = 0;
-        List<int> zsmBlocks = new();
+        var zsmBlocks = new List<int>();
 
-        address = bank << 16 + address; // 0x02a000;
+        address = (bank << 16) + (address & 0xffff); // 0x02a000;
 
         address = AddAddress(address, blocks.Count * 3); // move the address on away from the pointers
 
@@ -53,7 +52,6 @@ public static class ZsmCompressor
         dictionarySize = blocks.Count * 3;
         dataSize = hashSize;
 
-
         return CreatZsmComp(zsmBlocks, hashCounts, blocks);
     }
 
@@ -62,9 +60,12 @@ public static class ZsmCompressor
         var bank = (address & 0xFF0000) >> 16;
         var rawAddress = address & 0x00FFFF;
 
-        rawAddress -= 0xa000;
+        if (rawAddress < 0xa000)
+            throw new Exception();
 
+        rawAddress -= 0xa000;
         rawAddress += length;
+
         while (rawAddress > 0x2000)
         {
             rawAddress -= 0x2000;

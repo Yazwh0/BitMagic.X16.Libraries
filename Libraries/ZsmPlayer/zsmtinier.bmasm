@@ -328,7 +328,13 @@ if (UsingZp)
     lda #>$a000-1
     sta line_pointer + 1
 }
-
+else
+{
+    lda #<$a000-1
+    sta get_line_byte:line_pointer
+    lda #>$a000-1
+    sta get_line_byte:line_pointer + 1
+}
     rts
 
 .endproc
