@@ -1,6 +1,6 @@
 import BM="bm.bmasm";
 import Init="Initialisation.bmasm";
-import ZsmPlayer="../../../Libraries/ZsmPlayer/ZsmPlayer.bmasm";
+import ZsmPlayer="../../../Libraries/ZsmPlayer/zsmtiny.bmasm";
 
 var zsmRamBank = 2;
 
