@@ -85,10 +85,10 @@ In its smallest form, that only handles PSG and utilises ZP, the compressed play
 
 Player and the player size change in bytes per option. The base size is just with PSG and RAM bank not specified.
 
-| Version | Size | ZP | RamBank | YM | Ext |
-| ------- | ---- | -- | ------- | -- | --- |
-| Tinier | 198 bytes | -18 | -17 | +30 | +34 |
-| Tiny | 143 bytes | 0 | -17 | +30 | +34 |
+| Version | Size | ZP | RamBank | YM | Ext | Min Size | Max Size |
+| ------- | ---- | -- | ------- | -- | --- | -------- | -------- |
+| Tinier | 198 bytes | -18 | -17 | +30 | +34 | 163 bytes | 262 bytes |
+| Tiny | 143 bytes | 0 | -17 | +30 | +34 | 126 bytes | 241 bytes |
 
 The way the code is built is to optimize for the smallest code size by ensuring we do not include features that are not needed. This is why the library is only available as code, not as an object file or other means of sharing the binary.
 
