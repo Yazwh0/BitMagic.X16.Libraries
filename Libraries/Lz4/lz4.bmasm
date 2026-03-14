@@ -270,13 +270,6 @@ public class Lz4Decompressor
 
 		.decompress_exit:
 
-			; adjust batch_byte_count back to a normal value
-			lda batch_byte_count
-			ora batch_byte_count + 1
-			beq +
-			dec batch_byte_count + 1
-		.:
-
 			; adjust source_length
 			lda source_length
 			sec
@@ -288,6 +281,14 @@ public class Lz4Decompressor
 
 			lda all_done
 			bne decompress_done
+
+			; adjust batch_byte_count back to a normal value
+			lda batch_byte_count
+			ora batch_byte_count + 1
+			beq +
+			dec batch_byte_count + 1
+		.:
+
 			clc								; indicate we're not done, just ran out of the requested bytes
 			rts
 
@@ -338,22 +339,24 @@ public class Lz4Decompressor
 			cmp #$0f
 			beq more_length
 
+			cmp #0							; .A is block_length from above
+			beq +
+			inc block_length + 1
+		.:
+
 			ldx #WRITE_LITTERAL				; write litteral to output
 			stx decompress_state
-			;jmp decompress:done
 			jmp write_litteral
 
 		.no_litteral:
 			lda #GET_LOOKBACK_L
 			sta decompress_state			; we have the copy offset already
-			;jmp decompress:done
 			jmp get_lookback_l
 
 		.more_length:
 			ldx #GET_LITTERAL_LENGTH		; keep reading length data
 			stx decompress_state
-			;jmp decompress:done
-			;jmp get_litteral_length ; fall through
+			; fall through
 
 		.endproc
 
@@ -369,19 +372,22 @@ public class Lz4Decompressor
 			sta block_length
 			bcc add_skip
 			inc block_length + 1
-			; lda block_length + 1
-			; adc #0
-			; sta block_length + 1
 		.add_skip:
 
 			cpx #$ff
 			beq -loop
 
 		.done:
+
+			lda block_length
+			cmp #0
+			beq +
+			inc block_length + 1
+		.:
+
 			ldx #WRITE_LITTERAL
 			stx decompress_state
-			;jmp decompress:done
-			;jmp write_litteral ; fall through
+			; fall through
 		.endproc
 
 		.proc write_litteral
@@ -391,22 +397,14 @@ public class Lz4Decompressor
 		.dest_call:
 			jsr $abcd
 
-			sec
-			lda block_length
-			sbc #1
-			sta block_length
-
-			lda block_length + 1
-			sbc #0
-			sta block_length + 1
-
-			ora block_length
+			dec block_length
+			bne -loop
+			dec block_length + 1
 			bne -loop
 
 		.done:
 			lda #GET_LOOKBACK_L
 			sta decompress_state			; we have the copy offset already
-			;jmp decompress:done
 			jmp get_lookback_l
 
 		.endproc
@@ -441,20 +439,21 @@ public class Lz4Decompressor
 			clc
 			adc copy_length
 			sta copy_length
-			lda copy_length + 1
-			adc #0
-			sta copy_length + 1
-
-			cpx #$ff
+			bcc +
+			inc copy_length + 1
+		.:	cpx #$ff
 			beq -loop
 
-
-
 		.done:
+		; convert copy_length to a value that can be dec\dec'd
+			lda copy_length
+			beq +
+			inc copy_length	+ 1
+		.:
+
 			ldx #WRITE_COPY					; copy litteral
 			stx decompress_state
 			jmp (decompress:write_proc)
-			;jmp decompress:done
 
 		.endproc
 
@@ -464,8 +463,7 @@ public class Lz4Decompressor
 
 			ldx #GET_LOOKBACK_H				; get high byte of lookback
 			stx decompress_state
-			;jmp decompress:done
-			;jmp get_lookback_h ; fall through
+			; fall through
 		.endproc
 
 		.proc get_lookback_h
@@ -477,15 +475,19 @@ public class Lz4Decompressor
 			cmp #MORE_LITTERAL_LENGTH
 			beq next_copy_length
 
+		; convert copy_length to a value that can be dec\dec'd
+			lda copy_length
+			beq +
+			inc copy_length	+ 1
+		.:
+
 			ldx #WRITE_COPY					; write copy
 			stx decompress_state
 			jmp (decompress:write_proc)
-			;jmp decompress:done
 
 		.next_copy_length:
 			lda #GET_COPY_LENGTH
 			sta decompress_state			; read the length of the copy
-			;jmp decompress:done
 			jmp get_copy_length
 
 		.no_copy:
@@ -516,21 +518,23 @@ public class Lz4Decompressor
 				inc lookback + 1
 
 			.skip:
-				sec
-				lda copy_length
-				sbc #1
-				sta copy_length
+				; sec
+				; lda copy_length
+				; sbc #1
+				; sta copy_length
 
-				lda copy_length + 1
-				sbc #0
-				sta copy_length + 1
+				; lda copy_length + 1
+				; sbc #0
+				; sta copy_length + 1
 
-				ora copy_length
+				; ora copy_length
+				dec copy_length
+				bne -loop
+				dec copy_length + 1
 				bne -loop
 
 				stz decompress_state
 				jmp get_length_init
-				;jmp decompress:done
 
 			.endproc
 
@@ -572,25 +576,15 @@ public class Lz4Decompressor
 				ora #$10
 				sta ADDRx_H
 
-				; copy_length is adjusted so we can do dec bne dec bne
-
-				;ldy copy_length			; use .Y for the lower part of the count
-
 			.loop:
 				stx ADDRx_L
 				inx
 				lda DATA1
 				sta DATA0
 
-			.skip:
-				sec
-				lda copy_length
-				sbc #1
-				sta copy_length
-				lda copy_length + 1
-				sbc #0
-				sta copy_length + 1
-				ora copy_length
+				dec copy_length
+				bne -loop
+				dec copy_length + 1
 				bne -loop
 
 			.done:
@@ -598,7 +592,6 @@ public class Lz4Decompressor
 
 				stz decompress_state
 				jmp get_length_init
-				;jmp decompress:done
 
 			.endproc
 		}
