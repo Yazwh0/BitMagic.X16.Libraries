@@ -13,7 +13,8 @@
     "displaySegments": true,
     "saveGeneratedBmasm": true,
     "saveGeneratedTemplate": true,
-    "rebuild": true
+    "rebuild": true,
+    "WarnOnBranchOverPage": true
   },
   "sdCardFiles": []
 }

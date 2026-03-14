@@ -336,20 +336,20 @@ public class Lz4Decompressor
 
 			ldx #WRITE_LITTERAL				; write litteral to output
 			stx decompress_state
-			jmp decompress:done
-
-		.more_length:
-			ldx #GET_LITTERAL_LENGTH		; keep reading length data
-			stx decompress_state
-			jmp decompress:done
+			;jmp decompress:done
+			jmp write_litteral
 
 		.no_litteral:
 			lda #GET_LOOKBACK_L
 			sta decompress_state			; we have the copy offset already
-			jmp decompress:done
+			;jmp decompress:done
+			jmp get_lookback_l
 
-		.all_done:
-			jmp decompress:decompress_done
+		.more_length:
+			ldx #GET_LITTERAL_LENGTH		; keep reading length data
+			stx decompress_state
+			;jmp decompress:done
+			;jmp get_litteral_length ; fall through
 
 		.endproc
 
@@ -363,9 +363,12 @@ public class Lz4Decompressor
 			clc
 			adc block_length
 			sta block_length
-			lda block_length + 1
-			adc #0
-			sta block_length + 1
+			bcc add_skip
+			inc block_length + 1
+			; lda block_length + 1
+			; adc #0
+			; sta block_length + 1
+		.add_skip:
 
 			cpx #$ff
 			beq -loop
@@ -373,7 +376,56 @@ public class Lz4Decompressor
 		.done:
 			ldx #WRITE_LITTERAL
 			stx decompress_state
-			jmp decompress:done
+			;jmp decompress:done
+			;jmp write_litteral ; fall through
+		.endproc
+
+		.proc write_litteral
+
+		.loop:
+			jsr getbyte
+		.dest_call:
+			jsr $abcd
+
+			sec
+			lda block_length
+			sbc #1
+			sta block_length
+
+			lda block_length + 1
+			sbc #0
+			sta block_length + 1
+
+			ora block_length
+			bne -loop
+
+		.done:
+			lda #GET_LOOKBACK_L
+			sta decompress_state			; we have the copy offset already
+			;jmp decompress:done
+			jmp get_lookback_l
+
+		.endproc
+
+		; returns the next byte from the input in .A
+		.proc getbyte
+
+			dec this_byte_count
+			bne +
+			dec this_byte_count + 1
+			beq this_batch_done
+
+		.:
+			ReadSource();
+		.exit:
+			rts
+
+		; exhausted bytes requested, clear up the stack and jump out
+		.this_batch_done:
+			pla
+			pla
+			jmp decompress:decompress_exit
+
 		.endproc
 
 		.proc get_copy_length
@@ -395,7 +447,8 @@ public class Lz4Decompressor
 		.done:
 			ldx #WRITE_COPY					; copy litteral
 			stx decompress_state
-			jmp decompress:done
+			jmp (decompress:write_proc)
+			;jmp decompress:done
 
 		.endproc
 
@@ -405,7 +458,8 @@ public class Lz4Decompressor
 
 			ldx #GET_LOOKBACK_H				; get high byte of lookback
 			stx decompress_state
-			jmp decompress:done
+			;jmp decompress:done
+			;jmp get_lookback_h ; fall through
 		.endproc
 
 		.proc get_lookback_h
@@ -419,17 +473,20 @@ public class Lz4Decompressor
 
 			ldx #WRITE_COPY					; write copy
 			stx decompress_state
-			jmp decompress:done
+			jmp (decompress:write_proc)
+			;jmp decompress:done
 
 		.next_copy_length:
 			lda #GET_COPY_LENGTH
 			sta decompress_state			; read the length of the copy
-			jmp decompress:done
+			;jmp decompress:done
+			jmp get_copy_length
 
 		.no_copy:
 			stz decompress_state			; read the length of the copy
 			jmp decompress:done
-			jmp decompress:decompress_done	; all done!
+
+			;jmp decompress:decompress_done	; all done! NOT SURE WHY THIS IS HERE
 		.endproc
 
 		if (WriteToRam) {
@@ -466,7 +523,8 @@ public class Lz4Decompressor
 				bne -loop
 
 				stz decompress_state
-				jmp decompress:done
+				jmp get_length_init
+				;jmp decompress:done
 
 			.endproc
 
@@ -533,58 +591,11 @@ public class Lz4Decompressor
 				stz CTRL
 
 				stz decompress_state
-				jmp decompress:done
+				jmp get_length_init
+				;jmp decompress:done
 
 			.endproc
 		}
-
-		.proc write_litteral
-
-			nop
-		.loop:
-			jsr getbyte
-		.dest_call:
-			jsr $abcd
-
-			sec
-			lda block_length
-			sbc #1
-			sta block_length
-
-			lda block_length + 1
-			sbc #0
-			sta block_length + 1
-
-			ora block_length
-			bne -loop
-
-		.done:
-			lda #GET_LOOKBACK_L
-			sta decompress_state			; we have the copy offset already
-			jmp decompress:done
-
-		.endproc
-
-		; returns the next byte from the input in .A
-		.proc getbyte
-
-			dec this_byte_count
-			bne +
-			dec this_byte_count + 1
-			beq this_batch_done
-
-		.:
-			ReadSource();
-		.exit:
-			rts
-
-		; exhausted bytes requested, clear up the stack and jump out
-		.this_batch_done:
-			pla
-			pla
-			jmp decompress:decompress_exit
-
-		.endproc
 
 		.endscope
 		});

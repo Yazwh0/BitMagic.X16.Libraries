@@ -15,7 +15,7 @@ Array.Resize(ref compressed, length);
 
 Lz4.Create().FromRam("Main:data").ToVram().WithReadLength(512).WithDebugging().Build();
 
-.segment Bss, $400
+!segment Bss, $400
 .segment Main
 
 BM.X16Header();
