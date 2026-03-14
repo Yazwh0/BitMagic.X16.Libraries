@@ -4,7 +4,6 @@ import Init="Initialisation.bmasm";
 public static void Setup()
 {
 .segment Bss, scope:Lz4
-    .padvar byte step
     .padvar byte decompress_state
     .padvar ushort block_length
     .padvar ushort copy_length
@@ -249,9 +248,6 @@ public class Lz4Decompressor
 
 		.done:
 			ldx decompress_state
-			if (Debugging) {
-			inc step 						; for debugging
-			}
 			jmp (state_jumptable, x)
 
 		.state_jumptable:
