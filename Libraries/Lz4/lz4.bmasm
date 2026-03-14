@@ -8,11 +8,11 @@ public static void Setup()
     .padvar ushort block_length
     .padvar ushort copy_length
     .padvar ushort copy_lookback
-    .padvar ushort this_byte_count	; 16 bit counter for this iteration
-	.padvar ushort requested_byte_count ; how many bytes were requested to be read
-    .padvar ushort source_length	; 16 bit counter for total source length
-	.padvar ushort this_length		; how many bytes are to be read this time -- min of the legnth or the count from the source
-	.padvar byte all_done			; used to incidate that this iteration is the last.endsegment
+    .padvar ushort batch_byte_count			; 16 bit counter for this batcch
+	.padvar ushort requested_byte_count 	; how many bytes were requested to be read
+    .padvar ushort source_length			; 16 bit counter for total source length
+	.padvar ushort this_length				; how many bytes are to be read this time -- min of the legnth or the count from the source
+	.padvar byte all_done					; used to incidate that this iteration is the last.endsegment
 }
 
 private static List<Action> Procs = new List<Action>();
@@ -138,9 +138,9 @@ public class Lz4Decompressor
 		{
 			bcs +skip_initialise_byte_count
 			lda #@(length_l)
-			sta this_byte_count
+			sta batch_byte_count
 			lda #@(length_h)
-			sta this_byte_count + 1
+			sta batch_byte_count + 1
 		.skip_initialise_byte_count:
 			lda #@(length_l)
 			sta requested_byte_count
@@ -156,8 +156,8 @@ public class Lz4Decompressor
 		SetReadLength = () =>
 		{
 			; this doesn't quite work, it needs to be adjusted as above.
-			stx this_byte_count
-			sty this_byte_count + 1
+			stx batch_byte_count
+			sty batch_byte_count + 1
 			stx requested_byte_count
 			sty requested_byte_count + 1
 		};
@@ -173,6 +173,8 @@ public class Lz4Decompressor
 
 	public void Build()
 	{
+		var newProcess = true;
+
 		Procs.Add(() =>
 		{
 		.scope Lz4
@@ -206,45 +208,43 @@ public class Lz4Decompressor
 
 			SetReadLength();
 
-			; set this_byte_count to the min of itself and source_length -- we do this so we only need to have one counter
+			; set batch_byte_count to the min of itself and source_length -- we do this so we only need to have one counter
 			; compare high bytes,
 			stz all_done			; clear the all done flag
-			lda this_byte_count + 1
+			lda batch_byte_count + 1
 			cmp source_length + 1
 			bcc set_this_length		; carry is set if source_length is higher
 			bne replace				; not equal, so source_length is lower, other wise check lower byte
 
-			lda this_byte_count
+			lda batch_byte_count
 			cmp source_length
 			bcc set_this_length
 			beq set_this_length
 
 		.replace:
 			lda source_length
-			sta this_byte_count
+			sta batch_byte_count
 			lda source_length + 1
-			sta this_byte_count + 1
+			sta batch_byte_count + 1
 			lda #1
 			sta all_done			; indicate this is the last batch
 
 		.set_this_length:
-			lda this_byte_count
-			sta this_length
-			lda this_byte_count + 1
-			sta this_length + 1
-
-		; adjust this_byte_count so it can be counted down
+			; add one as we decrement and check first before reading the byte
 			clc
-			lda this_byte_count
+			lda batch_byte_count
+			sta this_length
 			adc #1
-			sta this_byte_count
-			lda this_byte_count + 1
+			sta batch_byte_count
+			lda batch_byte_count + 1
+			sta this_length + 1
 			adc #0
-			sta this_byte_count + 1
+			sta batch_byte_count + 1
 
-			lda this_byte_count
-			beq done
-			inc this_byte_count + 1
+			lda batch_byte_count
+			beq +
+			inc batch_byte_count + 1
+		.:
 
 		.done:
 			ldx decompress_state
@@ -269,6 +269,14 @@ public class Lz4Decompressor
 			}
 
 		.decompress_exit:
+
+			; adjust batch_byte_count back to a normal value
+			lda batch_byte_count
+			ora batch_byte_count + 1
+			beq +
+			dec batch_byte_count + 1
+		.:
+
 			; adjust source_length
 			lda source_length
 			sec
@@ -290,10 +298,10 @@ public class Lz4Decompressor
 			sec
 			lda requested_byte_count
 			sbc this_length
-			sta this_byte_count
+			sta batch_byte_count
 			lda requested_byte_count + 1
 			sbc this_length + 1
-			sta this_byte_count + 1
+			sta batch_byte_count + 1
 
 			sec								; indicate we're done
 			rts
@@ -406,9 +414,9 @@ public class Lz4Decompressor
 		; returns the next byte from the input in .A
 		.proc getbyte
 
-			dec this_byte_count
+			dec batch_byte_count
 			bne +
-			dec this_byte_count + 1
+			dec batch_byte_count + 1
 			beq this_batch_done
 
 		.:
@@ -439,6 +447,8 @@ public class Lz4Decompressor
 
 			cpx #$ff
 			beq -loop
+
+
 
 		.done:
 			ldx #WRITE_COPY					; copy litteral
