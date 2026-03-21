@@ -538,6 +538,7 @@ public class Lz4Decompressor
 
 			.endproc
 
+
 		; write a byte to the output
 			.proc writebyte_ram
 				sta write_pos: $abcd
@@ -550,42 +551,78 @@ public class Lz4Decompressor
 		}
 
 		if (WriteToVram) {
+			var unrolledLength = 32;
+
 			.proc write_copy_vram
 
 				lda ADDRx_H
-				pha
-				ldy ADDRx_M
-				ldx ADDRx_L
-
+				sta addr_h
+				ldx ADDRx_M
+				ldy ADDRx_L
 
 				lda #01
 				sta CTRL
 
 				sec
-				txa
-				sbc copy_lookback
-				tax						; keep ADDRx_L in .X and set it each time to avoid problems with data port reads.
-
 				tya
+				sbc copy_lookback
+				tay						; keep ADDRx_L in .Y and set it each time to avoid problems with data port reads.
+
+				txa
 				sbc copy_lookback + 1
 				sta ADDRx_M
 
-				pla
+				lda addr_h: #$00
 				and #$01
 				sbc #0
 				ora #$10
 				sta ADDRx_H
 
-			.loop:
-				stx ADDRx_L
-				inx
+			; 	unrolled loop for writing to vram
+			;	the first call will write the remainder of the first 16 bytes.
+			;	we then do write in full 16 byte steps.
+			;
+			; 	NEED TO PRESERVE Y FROM ABOVE
+			;
+			;	Do the first <@(unrolledLength) bytes first, then can process in @(unrolledLength) steps.
+			;
+				lda copy_length
+				tax
+
+				; mask off the lower bits, and increatment by 1 so the sub later works on the first instance
+				and #@((unrolledLength - 1) ^ 0xff)
+				clc
+				adc #@(unrolledLength)
+				sta copy_length
+				bne +
+				inc copy_length + 1
+
+			.:	txa
+				and #@(unrolledLength - 1)
+				asl
+				tax
+				jmp (write_jump, x)
+
+			.unrolled_start:
+			for(var i = 0; i < unrolledLength; i++)
+			{
+			.vram_step_@(i):
+				sty ADDRx_L
+				iny
 				lda DATA1
 				sta DATA0
+			}
 
-				dec copy_length
-				bne -loop
+			.done_part:
+				; check if zero, if so jump out othere wise do again.
+				sec
+				lda copy_length
+				sbc #@(unrolledLength)
+				sta copy_length
+				bne +
 				dec copy_length + 1
-				bne -loop
+				beq done
+			.:	jmp -unrolled_start
 
 			.done:
 				stz CTRL
@@ -593,8 +630,56 @@ public class Lz4Decompressor
 				stz decompress_state
 				jmp get_length_init
 
+			.write_jump:
+				.word done_part
+			for(var i = unrolledLength - 1; i >= 0; i--)
+			{
+				.word vram_step_@(i)
+			}
+
 			.endproc
 		}
+
+		; .proc old
+
+
+
+		; 		lda copy_length
+		; 		and #@(unrolledLength - 1)
+		; 		beq full_16_step 		; just do 16
+
+		; 		asl						; * 2
+		; 		tax						; use this for the jump table location lookup
+
+		; 		lda copy_length
+		; 		and #@((unrolledLength - 1) ^ 0xff)
+		; 		sta copy_length
+		; 		bne +
+		; 		dec copy_length + 1
+		; 		bne +
+		; 		lda #$80	; BRA
+		; 		sta done_branch
+		; 		jmp (write_jump, x)
+
+		; 	.:
+		; 		lda #$a9
+		; 		sta done_branch
+		; 		jmp (write_jump, x)
+
+		; 	.full_16_step:
+		; 		lda copy_length
+		; 	.loop:
+		; 		ldx #$a9	; LDA
+		; 		sec
+		; 		sbc #@(unrolledLength)
+		; 		sta copy_length
+		; 		bne +
+		; 		dec copy_length + 1
+		; 		bne +
+		; 		ldx #$80	; BRA
+		; 	.:
+		; 		stx done_branch
+		; .endproc
 
 		.endscope
 		});
