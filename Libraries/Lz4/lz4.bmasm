@@ -3,12 +3,15 @@ import Init="Initialisation.bmasm";
 
 public static void Setup()
 {
+
+.segment ZP, scope:Lz4
+    .padvar ushort copy_length				; 16 bit counter for a copy block count
+    .padvar ushort batch_byte_count			; 16 bit counter for this batch
+    .padvar ushort block_length				; 16 bit counter for a litteral write block count
+
 .segment Bss, scope:Lz4
     .padvar byte decompress_state
-    .padvar ushort block_length
-    .padvar ushort copy_length
     .padvar ushort copy_lookback
-    .padvar ushort batch_byte_count			; 16 bit counter for this batcch
 	.padvar ushort requested_byte_count 	; how many bytes were requested to be read
     .padvar ushort source_length			; 16 bit counter for total source length
 	.padvar ushort this_length				; how many bytes are to be read this time -- min of the legnth or the count from the source
@@ -518,16 +521,6 @@ public class Lz4Decompressor
 				inc lookback + 1
 
 			.skip:
-				; sec
-				; lda copy_length
-				; sbc #1
-				; sta copy_length
-
-				; lda copy_length + 1
-				; sbc #0
-				; sta copy_length + 1
-
-				; ora copy_length
 				dec copy_length
 				bne -loop
 				dec copy_length + 1
@@ -588,16 +581,15 @@ public class Lz4Decompressor
 			;
 				lda copy_length
 				tax
-
-				; mask off the lower bits, and increatment by 1 so the sub later works on the first instance
-				and #@((unrolledLength - 1) ^ 0xff)
-				clc
-				adc #@(unrolledLength)
+				; mask off the lower bits, an move high bits to lower bits so we can just do a dec
+				for(var i = 0; i < (int)Math.Log2(unrolledLength); i++)
+				{
+					lsr
+				}
+				inc
 				sta copy_length
-				bne +
-				inc copy_length + 1
 
-			.:	txa
+				txa
 				and #@(unrolledLength - 1)
 				asl
 				tax
@@ -614,14 +606,12 @@ public class Lz4Decompressor
 			}
 
 			.done_part:
-				; check if zero, if so jump out othere wise do again.
-				sec
-				lda copy_length
-				sbc #@(unrolledLength)
-				sta copy_length
+				dec copy_length
 				bne +
 				dec copy_length + 1
 				beq done
+				lda #@(unrolledLength - 1)
+				sta copy_length
 			.:	jmp -unrolled_start
 
 			.done:
