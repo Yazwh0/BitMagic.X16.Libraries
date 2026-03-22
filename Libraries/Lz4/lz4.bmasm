@@ -629,48 +629,6 @@ public class Lz4Decompressor
 
 			.endproc
 		}
-
-		; .proc old
-
-
-
-		; 		lda copy_length
-		; 		and #@(unrolledLength - 1)
-		; 		beq full_16_step 		; just do 16
-
-		; 		asl						; * 2
-		; 		tax						; use this for the jump table location lookup
-
-		; 		lda copy_length
-		; 		and #@((unrolledLength - 1) ^ 0xff)
-		; 		sta copy_length
-		; 		bne +
-		; 		dec copy_length + 1
-		; 		bne +
-		; 		lda #$80	; BRA
-		; 		sta done_branch
-		; 		jmp (write_jump, x)
-
-		; 	.:
-		; 		lda #$a9
-		; 		sta done_branch
-		; 		jmp (write_jump, x)
-
-		; 	.full_16_step:
-		; 		lda copy_length
-		; 	.loop:
-		; 		ldx #$a9	; LDA
-		; 		sec
-		; 		sbc #@(unrolledLength)
-		; 		sta copy_length
-		; 		bne +
-		; 		dec copy_length + 1
-		; 		bne +
-		; 		ldx #$80	; BRA
-		; 	.:
-		; 		stx done_branch
-		; .endproc
-
 		.endscope
 		});
 	}
