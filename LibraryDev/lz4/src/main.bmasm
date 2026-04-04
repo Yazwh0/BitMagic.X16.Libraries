@@ -8,13 +8,16 @@ import Lz4="..\..\..\Libraries\Lz4\Lz4.bmasm";
 
 var input = Encoding.UTF8.GetBytes("LZ4 TEST START aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc LZ4-LZ4-LZ4-LZ4-LZ4-LZ4-LZ4-LZ4 The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. END-OF-BLOCK-123");
 
+input = input.Concat(input).ToArray();
+
 ;var input = TestData().ToArray();
 var compressed =  new byte[LZ4Codec.MaximumOutputSize(input.Length)];
 var length = LZ4Codec.Encode(input, 0, input.Length, compressed, 0, compressed.Length, LZ4Level.L12_MAX);
 Array.Resize(ref compressed, length);
 
-Lz4.Create().FromRam("Main:data").ToVram().WithReadLength(512).WithDebugging().Build();
+Lz4.Create().FromRam("Main:data").ToRam().WithReadLength(512).WithDebugging().Build();
 
+!segment ZP,  $02
 !segment Bss, $400
 .segment Main
 
@@ -27,7 +30,7 @@ BM.X16Header();
 	ldy #>@(length + 1)
 	jsr Lz4:decompress_init
 
-	Lz4.ChangeToVram(0x0000);
+	Lz4.ChangeToRam(0x1000);
 
 .decompress_loop:
 	jsr Lz4:decompress

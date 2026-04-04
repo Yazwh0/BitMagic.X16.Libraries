@@ -531,8 +531,7 @@ public class Lz4Decompressor
 
 			.endproc
 
-
-		; write a byte to the output
+			; write a byte to the output
 			.proc writebyte_ram
 				sta write_pos: $abcd
 				inc write_pos
