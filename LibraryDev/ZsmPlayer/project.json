@@ -2,20 +2,21 @@
   "files": [
     {
       "type": "bitmagic",
-      "filename": "src/tinier.bmasm"
+      "filename": "src/tiny.bmasm"
     }
   ],
   "outputFolder": "app",
-  "autobootFile": "TINIER.PRG",
+  "autobootFile": "TINY.PRG",
   "memoryFillValue": 192,
   "windowScale": 2,
   "compileOptions": {
     "binFolder": "bin",
     "displaySegments": true,
+    "displayVariables": true,
     "saveGeneratedBmasm": true,
     "saveGeneratedTemplate": true,
     "savePreGeneratedTemplate": true,
-    "rebuild": true
+    "rebuild": false
   },
   "sdCardFiles": [
     {
@@ -25,7 +26,11 @@
     {
       "source": "AUDIO.BIN",
       "destination": "AUDIO.BIN"
+    },
+    {
+      "source": "AUDIOPCM.BIN",
+      "destination": "AUDIOPCM.BIN"
     }
   ],
-  "sdCardOutput": "zsmcomp.sdcard.bin.zip"
+  "_sdCardOutput": "zsmcomp.sdcard.bin.zip"
 }
