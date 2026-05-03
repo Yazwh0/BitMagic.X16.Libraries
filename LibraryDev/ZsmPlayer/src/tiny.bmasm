@@ -8,6 +8,7 @@ var zsmRamBank = 2;
 ZsmTiny.Create().WithPsg().UseZp().WithPcm("App:Main:pcm_instruments").UseRamBank(zsmRamBank).WithYm().Build();
 
 !segment ZP $02
+!segment ZPTemp $f0 $10
 !segment Main
 
 BM.X16Header();

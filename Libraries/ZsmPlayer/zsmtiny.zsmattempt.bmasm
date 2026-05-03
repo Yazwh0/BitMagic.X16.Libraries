@@ -1,0 +1,764 @@
+import BM="BM.bmasm";
+import Init="Initialisation.bmasm";
+
+public static void Setup()
+{
+
+}
+
+private static Action? Proc = null;
+
+public static ZsmPlayer Create()
+{
+    return new ZsmPlayer();
+}
+
+public class ZsmPlayer
+{
+    private bool UsesYm = false;
+    private bool UsesPsg = false;
+    private bool UsesExtCommands = false;
+    private bool UsingZp = false;
+    private bool UsesPcm = false;
+    private string PcmInstrumentLabel = "";
+    private int RamBank = -1;
+
+    private bool HasOverrides = false;
+
+    public ZsmPlayer WithYm()
+    {
+        UsesYm = true;
+        HasOverrides = true;
+        return this;
+    }
+
+    public ZsmPlayer WithPsg()
+    {
+        UsesPsg = true;
+        HasOverrides = true;
+        return this;
+    }
+
+    public ZsmPlayer WithExtCommands()
+    {
+        UsesExtCommands = true;
+        HasOverrides = true;
+        return this;
+    }
+
+    // the label is where we should put the 16*instruments, ideally aligned and can't cross banks
+    public ZsmPlayer WithPcm(string instrumentLabel)
+    {
+        UsesPcm = true;
+        UsingZp = true; // we need to use the ZP so we can use `lda (sample_pointer), y`.
+        UsesExtCommands = true;
+        HasOverrides = true;
+        PcmInstrumentLabel = instrumentLabel;
+        return this;
+    }
+
+    public ZsmPlayer UseZp()
+    {
+        UsingZp = true;
+        HasOverrides = true;
+        return this;
+    }
+
+    public ZsmPlayer UseRamBank(int bank)
+    {
+        RamBank = bank;
+        HasOverrides = true;
+        return this;
+    }
+
+    public void Build()
+    {
+        Proc = () =>
+        {
+
+        if (!HasOverrides)
+        {
+            UsesYm = true;
+            UsesPsg = true;
+            UsesExtCommands = true;
+            UsingZp = false;
+        }
+
+if (UsingZp)
+{
+.segment ZP scope:ZsmPlayer
+    .padvar ushort data_pointer
+if (UsesPcm)
+{
+    .padvar ushort sample_pointer
+}
+.endsegment
+if (UsesPcm)
+{
+.segment ZPTemp scope:ZsmPlayer
+    .padvar ushort temp_instrument_pointer
+.endsegment
+}
+}
+
+.scope ZsmPlayer
+.constvar uint psg_start = 0x1f9c0
+.padvar byte convert_value_high
+{
+.padvar byte pcmdata_start_bank
+.padvar ushort pcmdata_start_address
+.padvar byte sample_pointer_bank
+.padvar byte pcm_counter
+;.padvar byte pcminstrument_start_bank
+;.padvar ushort pcminstrment_start_address
+}
+
+.proc get_byte
+
+    inc data_pointer
+    bne +skip
+    inc data_pointer + 1
+    lda data_pointer + 1
+    cmp #$c0
+    bne +skip
+
+    lda RAM_BANK
+    inc
+    sta RAM_BANK
+    sta tick:ram_bank
+    lda #$a0
+    sta data_pointer + 1
+    stz data_pointer
+
+.skip:
+if (UsingZp)
+{
+    lda (data_pointer)
+}
+else
+{
+    lda data_pointer: $a00f        ; updated above, starting a byte before the end of the header, do like this so flags are right
+}
+    rts
+
+.endproc
+
+.proc tick
+
+    lda countdown: #$00
+    beq tick_setup
+
+    dec countdown
+    rts
+
+.tick_setup:
+    lda ram_bank: #$ab
+    sta RAM_BANK
+
+.tick_loop:
+    jsr get_byte
+
+if (UsesPcm)
+{
+    bpl skip
+    jmp exit
+.skip:
+}
+else
+{
+    bmi exit
+}
+if (UsesPsg)
+{
+    ldy ADDRx_H
+    sty addr_h
+    ldy ADDRx_M
+    sty addr_m
+    ldy ADDRx_L
+    sty addr_l
+
+    ldy #^psg_start
+    sty ADDRx_H
+    ldy #>psg_start
+    sty ADDRx_M
+}
+
+    ; 0x00xx_xxxx - Vera write
+    ; 0x0100_0000 - Ext Command
+    ; 0x01xx_xxxx - YM write
+
+if (UsesExtCommands || UsesYm)
+{
+    tax
+}
+if (UsesPsg && (UsesExtCommands || UsesYm))
+{
+    and #0b0100_0000
+    bne ext_or_ym
+}
+
+if (UsesPsg)
+{
+.vera:
+    clc
+if (UsesExtCommands || UsesYm)
+{
+    txa
+}
+    adc #<psg_start
+    sta ADDRx_L
+
+    jsr get_byte
+    sta DATA0
+    bra -tick_loop
+}
+
+.ext_or_ym:
+if (UsesPsg && (UsesExtCommands || UsesYm))
+{
+    txa
+}
+if (UsesExtCommands && UsesYm)
+{
+    and #0b0011_1111
+    beq ext_command
+}
+
+if (UsesYm)
+{
+; use the masked value in .A for the loop via .Y
+.ym:
+    tay
+
+.ym_loop:
+.:  bit $9f41
+    bmi -
+    jsr get_byte
+    sta $9f40
+    jsr get_byte
+    sta $9f41
+
+    dey
+    bne -ym_loop
+    bra -tick_loop
+}
+
+if (UsesExtCommands)
+{
+.ext_command:
+if (UsesPcm)
+{
+    jsr get_byte
+    tay
+    and #0b1100_0000
+    beq play_pcm                ; if zero, we're playing PCM, otherwise ignore
+
+    ; returns 0xccnn_nnnn - cc = command, nnnnnnnn = length
+    tya
+    and #0b0011_1111
+    tax
+
+.:  beq -tick_loop
+    jsr get_byte
+    dex
+    bra -
+
+.play_pcm:
+    ; always two bytes, command and then data
+    ; commands are:
+    ; 0x00 set AUDIO_CTRL
+    ; 0x01 set AUDIO_RATE
+    ; 0x02: play instrument
+    tya             ; find the number of commands to process
+    lsr
+    tay
+
+.:  jsr get_byte
+    lsr                 ; .C then AUDIO_RATE, Z for AUDIO_CRTL, otherwise play command
+    bcs audio_rate
+    beq audio_ctrl
+
+.play_insturment:
+    jsr get_byte        ; returns the instrument number
+
+    ; set sample pointer and bank
+
+    lda #$ea            ; nop
+    sta playing_pcm
+    dey
+    bne -
+    jmp tick_loop
+
+.audio_rate:
+    jsr get_byte
+    sta AUDIO_RATE
+    dey
+    bne -
+    jmp tick_loop
+
+.audio_ctrl:
+    jsr get_byte
+    sta AUDIO_CTRL
+    dey
+    bne -
+    jmp tick_loop
+}
+else
+{
+    jsr get_byte
+    ; returns 0xccnn_nnnn - cc = command, nnnnnnnn = length
+    and #0b0011_1111
+    tax
+
+.:  beq -tick_loop
+    jsr get_byte
+    dex
+    bra -
+}
+}
+
+.exit:
+if (UsesPsg)
+{
+    ldy addr_h: #$ab
+    sty ADDRx_H
+    ldy addr_m: #$ab
+    sty ADDRx_M
+    ldy addr_l: #$ab
+    sty ADDRx_L
+}
+
+    and #$7f
+    beq all_done
+    dec
+    sta countdown
+
+.step_done:
+
+if (UsesPcm)
+{
+    rts
+    ; play the PCM
+.playing_pcm: rts       ; will be a nop if we're playing
+
+    ldx initial_playback_part_length: #$00
+    beq initial_playback_done
+
+    ; playback the odd part at the start
+
+.initial_playback_done:
+    ldx pcm_counter
+.playing_pcm_start:
+    ldy #0
+    for(var i = 0; i < 16; i++)
+    {
+        lda (sample_pointer), y
+        sta AUDIO_DATA
+        iny
+    }
+
+    ; increment sample pointer by 16bytes
+    clc
+    lda sample_pointer
+    adc #16
+    sta sample_pointer
+
+    beq +
+
+
+
+.:  dex
+    bne -playing_pcm_start
+
+    ; detect if we're done
+
+    beq playing_pcm_done
+    lda #$60            ; rts
+    sta playing_pcm
+
+.playing_pcm_done:
+}
+    rts
+
+.all_done:
+    ; loop or flag or whatever
+if (RamBank == -1)
+{
+    lda done_ram_bank: #$00
+    sta tick:ram_bank
+
+    if (UsingZp)
+    {
+    lda #<$a00f
+    sta data_pointer
+    lda #>$a00f
+    sta data_pointer + 1
+    }
+    else
+    {
+    lda #<$a00f
+    sta get_byte:data_pointer
+    lda #>$a00f
+    sta get_byte:data_pointer + 1
+    }
+    rts
+}
+; falls though
+.endproc
+
+.proc init_player
+
+if (RamBank == -1)
+{
+    ldx RAM_BANK
+    stx tick:ram_bank
+    stx tick:done_ram_bank
+    stx convert_value_to_bankaddress:base_bank
+    stx convert_bankaddress_to_value:base_bank
+}
+else
+{
+    ldx #@(RamBank)     ; Ram Bank
+    stx tick:ram_bank
+    stx convert_value_to_bankaddress:base_bank
+    stx convert_bankaddress_to_value:base_bank
+}
+
+if (UsingZp)
+{
+    lda #<$a00f
+    sta data_pointer
+    lda #>$a00f
+    sta data_pointer + 1
+}
+
+if (UsesPcm)
+{
+    ; need to get the intrument data to a place where we can access it quickly. this is provided by the user.
+    stx ram_bank
+
+    ; add three to the PCM offset in the stream
+    lda $a006
+    ldy $a007
+    ldx $a008
+    adc #3
+    sta sample_pointer
+    bcc +
+    iny
+    bne +
+    inx
+
+.:
+    jsr convert_value_to_bankaddress
+
+    sty sample_pointer + 1
+    stx RAM_BANK
+
+    ; sample_pointer is now at the instrument byte in the PCM header
+
+    lda (sample_pointer)                ; number of instruments (0 based)
+    tax
+    inx                                 ; add one as its zero based.
+    stx instrument_count_loop           ; use it later
+
+    ldy #0
+.loop:
+    inc sample_pointer
+    bne +
+    inc sample_pointer + 1              ; 5 + 3 cycles, same as lda\inc\sta (3, 2, 3), but one less byte
+    lda sample_pointer + 1
+    cmp #$c0
+    bne +
+    inc RAM_BANK
+    lda #$a0
+    sta sample_pointer + 1
+.:
+
+    lda (sample_pointer)
+    sta instrument_dest: @(PcmInstrumentLabel), y
+
+    iny
+    cpy #16
+    bne -loop
+
+    ; instrument is copied
+    ; need to preserve x
+    stx instrument_count_loop_store
+
+    lda instrument_dest
+    sta temp_instrument_pointer
+    lda instrument_dest + 1
+    sta temp_instrument_pointer + 1
+
+    ; need to store the values in a way that can set pcm_counter, sample_pointer and sample_pointer_bank.
+    ; generate functions that can be called after tick:play_insturment ?
+
+    ; need $xxyy
+    ; PCM Start Address
+    ldy #4
+    lda (temp_instrument_pointer), y
+    tax
+    ldy #3
+    lda (temp_instrument_pointer), y
+    tay
+
+    jsr convert_value_to_bankaddress
+
+    tya
+    ldy #3
+    sta (temp_instrument_pointer), y
+    txa
+    ldy #4
+    sta (temp_instrument_pointer), y
+
+    ldx instrument_count_loop_store: #$00
+
+    lda instrument_dest
+    clc
+    adc #16
+    sta instrument_dest
+    bne +
+    inc instrument_dest + 1
+
+.:  ldy #0
+    dex
+    bne -loop
+
+    ; sample pointer not points at the start of the PCM data. Store this as we'll need it for the playback
+
+
+    ; calculate the PCM Data start offset
+    ; need to convert bank address to offset
+
+    ldy RAM_BANK
+    ldx sample_pointer + 1
+
+    jsr convert_bankaddress_to_value
+
+    ; now have the linear position of the PCM data, so we can add on the instrument offsets
+
+    lda sample_pointer
+    sta pcmdata_start_address
+    sty pcmdata_start_address + 1
+    stx pcmdata_start_bank
+
+    ; we can use the pcm start data, to calculate the address, then convert it to bank space.
+
+    ldx #0
+.adjustment_loop:
+    phx
+
+    ; how do we iterate through our instruments?
+
+
+
+    plx
+    inx
+    cpx instrument_count_loop: #$00
+    bne -adjustment_loop
+
+;     ; use the sample point to adjust the instrument data
+;     lda #<@(PcmInstrumentLabel)
+;     sta sample_pointer
+;     lda #>@(PcmInstrumentLabel)
+;     sta sample_pointer + 1
+
+;     ldx #0
+;     bra adjustment_start
+
+; .adjustment_loop:
+;     clc
+;     lda sample_pointer
+;     adc #16
+;     sta sample_pointer
+;     bcc adjustment_start
+;     inc sample_pointer + 1
+
+; .adjustment_start:
+;     phx
+
+;     ldy #4
+;     lda (sample_pointer), y
+;     tax
+;     ldy #3
+;     lda (sample_pointer), y
+;     tay
+
+;     jsr convert_value_to_bankaddress
+
+;     tya
+;     ldy #3
+;     sta (sample_pointer), y
+;     txa
+;     ldy #4
+;     sta (sample_pointer), y
+
+;     plx
+;     inx
+;     cmp instrument_count_loop: #$00
+;     bne -adjustment_loop
+
+
+    lda ram_bank: #$00
+    sta RAM_BANK
+}
+
+
+    rts
+
+.endproc
+
+if(UsesPcm)
+{
+
+.proc play_instrument_template
+
+    lda #$00 ; initial length for start
+    sta tick:initial_playback_part_length
+
+    lda #$00 ; sample start l
+    sta sample_pointer
+
+    lda #$00 ; sample start m
+    sta sample_pointer + 1
+
+    lda #$00 ; sample start h
+    sta sample_pointer_bank
+
+    lda #$00 ; length per frame in 16 byte blocks
+    sta pcm_counter
+
+    lda #$00 ; frames
+    sta $0000
+
+    lda #$00 ; last frame count in 16 byte blocks
+    sta $0000
+
+    lda #$00 ; has repeater
+    sta $0000
+
+    lda #$00 ; loop start l
+    sta $0000
+    lda #$00  ; loop start m    sta sample_pointer
+    sta $0000
+    lda #$00  ; loop start h
+    sta $0000
+
+    rts
+
+.endproc
+
+; Take an address and convert it into ram bank space.
+; lower bytes are not considered.
+; Input:  $XXYY__ \\ .X = high byte, .Y mid byte
+; Output: $XXYY__ \\ .X = converted high byte, .Y = converted mid byte
+; Example
+; $0164f0, .X = $01, .Y = $64, base bank = 2
+; Result
+; $0da4f0, .X = $0d, .Y = $a4
+.proc convert_value_to_bankaddress
+    txa
+    asl
+    asl
+    asl
+    sta converted_value_high            ; top byte * 8
+
+    tya
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr                                 ; now contains number of banks
+    tax
+
+    tya
+    and #0b0001_1111
+    clc
+    adc #$a0
+    tay                                 ; y now is complete
+
+    txa
+    adc base_bank: #$00                 ; global value from which the data starts
+    adc converted_value_high: #$00
+    tax
+
+    rts
+.endproc
+
+; Take an bank address and convert it into linear space.
+; lower bytes are not considered.
+; Input:  $XXYY__ \\ .X = high byte, .Y mid byte
+; Output: $XXYY__ \\ .X = converted high byte, .Y = converted mid byte
+; Example
+; $0da4f0, .X = $0d, .Y = $a4, base bank = 2
+; Result
+; $0164f0, .X = $01, .Y = $64
+.proc convert_bankaddress_to_value
+
+    tya
+    sec
+    sbc #$a0
+    sta converted_value_mid
+
+    txa
+    sec
+    sbc base_bank: #$00
+
+    asl
+    asl
+    asl
+    asl
+    asl
+    clc
+    adc converted_value_mid: #$00
+    tay                                 ; y is now complete
+
+    txa
+    and #0b1111_1000
+    lsr
+    lsr
+    lsr
+    tax
+
+    rts
+.endproc
+
+}
+
+.playback_ticks:
+var playbackTicks = new List<byte>();
+for(var i = 0 ; i <= 128; i++)
+{
+    if ((i & 0x01) == 1)
+        continue;
+
+    if (i == 0)
+    {
+        playbackTicks.Add(0);
+        continue;
+    }
+
+    playbackTicks.Add((byte)((int)(((25000000.0/512.0) * (i / 128.0)) / 60 / 16) + 1));
+}
+BM.Bytes(playbackTicks);
+
+.endscope
+        };
+    }
+}
+
+public override void Initialise()
+{
+    Setup();
+}
+
+public void Generate()
+{
+    if (Proc == null)
+    {
+        var p = Create();
+        p.Build();
+    }
+
+    Proc();
+}

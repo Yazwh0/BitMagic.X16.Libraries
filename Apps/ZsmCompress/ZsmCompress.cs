@@ -8,15 +8,19 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security;
+using System.Text;
 
 namespace ZsmCompress;
 
 public static class ZsmCompressor
 {
-    public static byte[] Compress(byte[] inputData, int bank, int address, out int dictionarySize, out int dataSize)
+    // output is
+
+    public static byte[] Compress(byte[] inputData, int bank, int address, out int dictionarySize, out int dataSize, out int pcmSize, out string procs)
     {
         var parser = new ZsmParser(1, false);
-        var (_, parsedBlocks) = parser.ParseStream(new MemoryStream(inputData));
+        // ParseStream now returns PCM instruments and raw PCM bytes; preserve previous behavior by ignoring instruments but pass them to CreatZsmComp.
+        var (_, parsedBlocks, parsedPcmContainer, parsedPcmData) = parser.ParseStream(new MemoryStream(inputData));
         var blocks = parsedBlocks ?? new List<ZsmBlock>();
 
         var hashCounts = new Dictionary<string, (int Count, int Index, int Address)> ();
@@ -52,7 +56,10 @@ public static class ZsmCompressor
         dictionarySize = blocks.Count * 3;
         dataSize = hashSize;
 
-        return CreatZsmComp(zsmBlocks, hashCounts, blocks);
+        // 'address' now points to the banked address immediately after the unique block data.
+        // Pass parsed instruments + pcm blob + the start address so CreatZsmComp can append each instrument padded to 16 bytes
+        // and set its Address field to the correct banked address.
+        return CreatZsmComp(zsmBlocks, hashCounts, blocks, parsedPcmContainer, parsedPcmData, address, out pcmSize, out procs);
     }
 
     private static int AddAddress(int address, int length)
@@ -80,13 +87,28 @@ public static class ZsmCompressor
     // Writes the pointer table followed by the unique blocks in dictionary order.
     // - Each entry in `zsmBlocks` is written as 3 bytes little-endian (low, mid, high).
     // - Unique blocks are written in ascending Index order from `hashCounts`.
-    private static byte[] CreatZsmComp(List<int> zsmBlocks, Dictionary<string, (int Count, int Index, int Address)> hashCounts, List<ZsmBlock> blocks)
+    // - If `pcmContainer` is provided, each instrument's PCM data is appended after the block data.
+    //   Each instrument is individually padded so it starts on a 16-byte boundary. The instrument's
+    //   `Address` property is set to the banked address where its sample data begins.
+    // - If no `pcmContainer` but `pcmData` is present, the entire blob is appended and aligned to 16 bytes.
+    // Returns the generated output and sets out `pcmSize` to the total size of appended PCM data including padding.
+    private static byte[] CreatZsmComp(
+        List<int> zsmBlocks,
+        Dictionary<string, (int Count, int Index, int Address)> hashCounts,
+        List<ZsmBlock> blocks,
+        PcmContainer? pcmContainer,
+        byte[]? pcmData,
+        int pcmStartAddress,
+        out int pcmSize,
+        out string procs)
     {
         if (zsmBlocks is null) throw new ArgumentNullException(nameof(zsmBlocks));
         if (hashCounts is null) throw new ArgumentNullException(nameof(hashCounts));
         if (blocks is null) throw new ArgumentNullException(nameof(blocks));
 
         using var outputStream = new MemoryStream();
+        pcmSize = 0;
+        procs = "";
 
         // Write pointer table: each pointer as 3 bytes little-endian
         foreach (var ptr in zsmBlocks)
@@ -107,6 +129,103 @@ public static class ZsmCompressor
 
             outputStream.Write(block.Data, 0, block.Data.Length);
         }
+
+        // If we have a PCM container with per-instrument data, append each instrument padded to 16 bytes
+        if (pcmContainer is not null && pcmContainer.Instruments is { Count: > 0 })
+        {
+            // Start with the banked address that corresponds to the current output position
+            int currBankedAddress = pcmStartAddress;
+
+            var sb = new StringBuilder();
+
+            // Ensure instruments are appended in index order for deterministic layout
+            foreach (var inst in pcmContainer.Instruments.OrderBy(i => i.Index))
+            {
+                // Pad output to 16-byte boundary before this instrument
+                long mod = outputStream.Length % 16;
+                int pad = (int)((16 - mod) % 16);
+                if (pad > 0)
+                {
+                    var padBytes = new byte[pad];
+                    outputStream.Write(padBytes, 0, pad);
+                    pcmSize += pad;
+                    currBankedAddress = AddAddress(currBankedAddress, pad);
+                }
+
+                // Record instrument address (banked)
+                inst.Address = currBankedAddress;
+
+                // Append instrument data
+                if (inst.Data is not null && inst.Data.Length > 0)
+                {
+                    outputStream.Write(inst.Data, 0, inst.Data.Length);
+                    pcmSize += inst.Data.Length;
+                    currBankedAddress = AddAddress(currBankedAddress, inst.Data.Length);
+                }
+
+                sb.AppendLine(@$"
+.proc play_instrument_{inst.Index}
+
+    lda #$00 ; initial length for start             MAKE THIS CALL NOW??
+    sta tick:initial_playback_part_length
+
+    lda #${(byte)(inst.Address & 0xff):X2} ; sample start l
+    sta sample_pointer
+
+    lda #${(byte)((inst.Address >> 8) & 0xff):X2} ; sample start m
+    sta sample_pointer + 1
+
+    lda #${(byte)((inst.Address >> 16) & 0xff):X2} ; sample start h
+    sta sample_pointer_bank
+
+    lda #$00 ; length per frame in 16 byte blocks
+    sta pcm_counter
+
+    lda #$00 ; frames
+    sta $0000
+
+    lda #$00 ; last frame count in 16 byte blocks
+    sta $0000
+
+    lda #{(inst.IsLooped ? 1 : 0)} ; has repeater
+    sta $0000
+
+    lda #$00 ; loop start l
+    sta $0000
+    lda #$00  ; loop start m    sta sample_pointer
+    sta $0000
+    lda #$00  ; loop start h
+    sta $0000
+
+    rts
+
+.endproc
+");
+
+            }
+
+            procs = sb.ToString();
+        }
+        else if (pcmData is not null && pcmData.Length > 0)
+        {
+            // Fallback: append the whole blob aligned to 16 bytes
+            long mod = outputStream.Length % 16;
+            int pad = (int)((16 - mod) % 16);
+            if (pad > 0)
+            {
+                var padBytes = new byte[pad];
+                outputStream.Write(padBytes, 0, pad);
+                pcmSize += pad;
+            }
+
+            outputStream.Write(pcmData, 0, pcmData.Length);
+            pcmSize += pcmData.Length;
+        }
+        else
+        {
+            // no PCM appended; pcmSize remains 0
+        }
+
 
         return outputStream.ToArray();
     }
@@ -146,10 +265,34 @@ internal sealed record ZsmBlock(
 }
 
 /// <summary>
+/// PCM instrument description parsed from the PCM header.
+/// </summary>
+internal sealed record PcmInstrument(
+    byte Index,
+    bool Is16Bit,
+    bool IsStereo,
+    int Offset,     // offset into PCM data blob (relative to PCM sample data start)
+    int Length,     // length in bytes
+    bool IsLooped,
+    int LoopPoint,  // offset into this instrument's sample (relative)
+    byte[] Data     // the actual PCM bytes for this instrument
+)
+{
+    // Filled by CreatZsmComp when the PCM blob is appended.
+    public int Address { get; set; } = 0;
+}
+
+internal sealed record PcmContainer(
+    byte LastIndex,
+    List<PcmInstrument> Instruments
+);
+
+/// <summary>
 /// Parses a ZSM file and splits the music stream into blocks that end in a "pause".
 /// A "pause" here is a Delay command (0x81-0xFF) whose ticks >= minPauseTicks, or EOF (0x80).
-/// The parser consumes the ZSM header and the music stream up to the 0x80 marker. PCM header/data after 0x80 are not interpreted
-/// by the block splitting but are left unread by ParseStream (caller can continue reading if desired).
+/// The parser consumes the ZSM header and the music stream up to the 0x80 marker. PCM header/data after 0x80
+/// are parsed according to the Furnace / X16 ZSM spec: instruments are returned as structured objects and the PCM
+/// sample data blob is returned as raw bytes as well.
 ///
 /// New: The parser can optionally exclude EXTCMD blocks (0x40 and following bytes) from the returned block data
 /// by setting includeExtCmds = false. The parser will still consume those bytes from the stream (advancing offsets),
@@ -172,13 +315,13 @@ internal sealed class ZsmParser
         _includeExtCmds = includeExtCmds;
     }
 
-    public (ZsmHeader Header, List<ZsmBlock> Blocks) ParseFile(string filePath)
+    public (ZsmHeader Header, List<ZsmBlock> Blocks, PcmContainer? Instruments, byte[]? PcmData) ParseFile(string filePath)
     {
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
         return ParseStream(fs);
     }
 
-    public (ZsmHeader Header, List<ZsmBlock> Blocks) ParseStream(Stream stream)
+    public (ZsmHeader Header, List<ZsmBlock> Blocks, PcmContainer? Instruments, byte[]? PcmData) ParseStream(Stream stream)
     {
         if (stream is null) throw new ArgumentNullException(nameof(stream));
         if (!stream.CanRead) throw new ArgumentException("Stream must be readable", nameof(stream));
@@ -206,6 +349,9 @@ internal sealed class ZsmParser
 
         long blockStartOffset = absOffset; // music stream begins immediately after header (offset 16)
         int b;
+        PcmContainer? pcmContainer = null;
+        byte[]? pcmData = null;
+
         while (true)
         {
             b = ReadByteOrThrow(stream, ref absOffset);
@@ -254,7 +400,136 @@ internal sealed class ZsmParser
                 // include the 0x80 byte
                 current.WriteByte((byte)b);
                 FinalizeCurrentBlock(blocks, current, blockStartOffset, endsWithPause: true, pauseTicks: -1);
-                // Advance pointer to PCM header if caller wants to continue reading; parsing of PCM optional
+
+                // Attempt to parse PCM header/data according to spec if present.
+                if (header.PcmOffset != 0)
+                {
+                    long pcmHeaderAbs = header.PcmOffset; // absolute offset from start of ZSM header (file)
+                    // Try to position to pcmHeaderAbs
+                    if (stream.CanSeek)
+                    {
+                        stream.Position = pcmHeaderAbs;
+                        absOffset = pcmHeaderAbs;
+                    }
+                    else
+                    {
+                        if (pcmHeaderAbs > absOffset)
+                        {
+                            // read and discard until we reach pcmHeaderAbs
+                            ReadAndDiscard(stream, (int)(pcmHeaderAbs - absOffset), ref absOffset);
+                        }
+                        else if (pcmHeaderAbs < absOffset)
+                        {
+                            // cannot seek backwards on non-seekable stream; we'll attempt to parse at current position
+                            // but prefer to fail-safe by checking magic before trusting header.
+                        }
+                    }
+
+                    // Read 4 bytes for PCM header signature + last index
+                    var phdr = new byte[4];
+                    try
+                    {
+                        ReadExactly(stream, phdr, 0, 4, ref absOffset);
+                    }
+                    catch (EndOfStreamException)
+                    {
+                        // no PCM header present
+                        break;
+                    }
+
+                    if (phdr[0] == (byte)'P' && phdr[1] == (byte)'C' && phdr[2] == (byte)'M')
+                    {
+                        byte lastIndex = phdr[3];
+                        int instrumentCount = lastIndex + 1;
+                        int pcmHeaderSize = 4 + (16 * instrumentCount);
+
+                        // we already read 4 bytes; read the remainder of the header
+                        var fullHeader = new byte[pcmHeaderSize];
+                        Array.Copy(phdr, 0, fullHeader, 0, 4);
+                        if (pcmHeaderSize > 4)
+                        {
+                            ReadExactly(stream, fullHeader, 4, pcmHeaderSize - 4, ref absOffset);
+                        }
+
+                        // Calculate sample data start (absolute)
+                        long sampleDataAbs = (stream.CanSeek ? stream.Position : absOffset);
+
+                        // Read the remaining bytes as PCM sample blob
+                        using var pcmStream = new MemoryStream();
+                        var buf = new byte[4096];
+                        int r;
+                        while ((r = stream.Read(buf, 0, buf.Length)) > 0)
+                        {
+                            pcmStream.Write(buf, 0, r);
+                            absOffset += r;
+                        }
+
+                        pcmData = pcmStream.Length == 0 ? Array.Empty<byte>() : pcmStream.ToArray();
+
+                        // Parse instrument entries
+                        var instruments = new List<PcmInstrument>(instrumentCount);
+                        for (int i = 0; i < instrumentCount; i++)
+                        {
+                            int baseOff = 4 + (i * 16);
+                            byte instIndex = fullHeader[baseOff + 0];
+                            byte audioCtrl = fullHeader[baseOff + 1];
+                            int off24 = ReadLe24(fullHeader, baseOff + 2);   // offset into pcm data blob
+                            int len24 = ReadLe24(fullHeader, baseOff + 5);   // length
+                            byte features = fullHeader[baseOff + 8];
+                            int loopPt = ReadLe24(fullHeader, baseOff + 9);
+
+                            bool is16 = (audioCtrl & 0x20) != 0;
+                            bool isStereo = (audioCtrl & 0x10) != 0;
+                            bool isLooped = (features & 0x80) != 0;
+
+                            // Validate bounds of offset/length inside pcmData
+                            if (off24 < 0 || len24 < 0 || off24 + len24 > (pcmData?.Length ?? 0))
+                            {
+                                // Invalid instrument spec — throw to indicate malformed PCM header.
+                                throw new InvalidDataException($"PCM instrument {instIndex} references out-of-range sample data (offset {off24}, length {len24}, pcm blob length {(pcmData?.Length ?? 0)}).");
+                            }
+
+                            var instData = new byte[len24];
+                            if (len24 > 0)
+                                Array.Copy(pcmData!, off24, instData, 0, len24);
+
+                            instruments.Add(new PcmInstrument(
+                                instIndex,
+                                is16,
+                                isStereo,
+                                off24,
+                                len24,
+                                isLooped,
+                                loopPt,
+                                instData
+                            ));
+                        }
+
+                        pcmContainer = new PcmContainer(lastIndex, instruments);
+                    }
+                    else
+                    {
+                        // Not a valid PCM header; treat as no PCM present.
+                        // We already consumed those 4 bytes, but return whatever remains as pcmData if any.
+                        using var remaining = new MemoryStream();
+                        // include the 4 bytes already read
+                        remaining.Write(phdr, 0, 4);
+                        var buf = new byte[4096];
+                        int r2;
+                        while ((r2 = stream.Read(buf, 0, buf.Length)) > 0)
+                        {
+                            remaining.Write(buf, 0, r2);
+                            absOffset += r2;
+                        }
+                        pcmData = remaining.Length == 0 ? null : remaining.ToArray();
+                    }
+                }
+                else
+                {
+                    // pcmOffset == 0: no PCM header present. Nothing to do.
+                }
+
+                // Done parsing
                 break;
             }
             else if (b >= 0x81 && b <= 0xFF)
@@ -282,7 +557,7 @@ internal sealed class ZsmParser
         }
 
         // If there is leftover bytes after EOF marker in current MemoryStream they were finalized on EOF.
-        return (header, blocks);
+        return (header, blocks, pcmContainer, pcmData);
     }
 
     private static void FinalizeCurrentBlock(List<ZsmBlock> blocks, MemoryStream current, long startOffset, bool endsWithPause, int pauseTicks)

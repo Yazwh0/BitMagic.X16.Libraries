@@ -39,14 +39,16 @@ class Program
                 Console.WriteLine("Done.");
 
                 Console.Write("Compressing... ");
-                var compressedData = ZsmCompressor.Compress(inputData, arguments.Bank, arguments.Address, out var dictionarySize, out var dataSize);
+                var compressedData = ZsmCompressor.Compress(inputData, arguments.Bank, arguments.Address, out var dictionarySize, out var dataSize, out var pcmDataSize, out var pcmHeaderSize);
                 Console.WriteLine("Done.");
 
-                Console.WriteLine($"Input Size      : {inputData.Length:#,##0} bytes.");
-                Console.WriteLine($"Dictionary Size : {dictionarySize:#,##0} bytes.");
-                Console.WriteLine($"Data Size       : {dataSize:#,##0} bytes.");
-                Console.WriteLine($"Total Size      : {dictionarySize + dataSize:#,##0} bytes. ({(dictionarySize + dataSize) / (double)inputData.Length:0.0%})");
-                if (dictionarySize + dataSize > inputData.Length)
+                Console.WriteLine($"Input Size        : {inputData.Length:#,##0} bytes.");
+                Console.WriteLine($"Dictionary Size   : {dictionarySize:#,##0} bytes. ({dictionarySize / (double)compressedData.Length:0.0%} of output)");
+                Console.WriteLine($"Data Size         : {dataSize:#,##0} bytes. ({dataSize / (double)compressedData.Length:0.0%} of output)");
+                Console.WriteLine($"PCM Header Size   : {pcmHeaderSize:#,##0} bytes. ({pcmHeaderSize / (double)compressedData.Length:0.0%} of output)");
+                Console.WriteLine($"PCM Data Size     : {pcmDataSize:#,##0} bytes. ({pcmDataSize / (double)compressedData.Length:0.0%} of output)");
+                Console.WriteLine($"Total Size        : {compressedData.Length:#,##0} bytes. ({compressedData.Length / (double)inputData.Length:0.0%} of original)");
+                if (compressedData.Length > inputData.Length)
                 {
                     Console.WriteLine("Warning: Output is larger than the input. Consider using an uncompressed version.");
                 }

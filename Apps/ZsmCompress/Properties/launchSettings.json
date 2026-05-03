@@ -2,7 +2,7 @@
   "profiles": {
     "ZsmCompress": {
       "commandName": "Project",
-      "commandLineArgs": "-i ..\\..\\..\\AUDIO.ZSM -o ..\\..\\..\\AUDIO.ZSMCOMP.BIN -b 2"
+      "commandLineArgs": "-i ..\\..\\..\\AUDIOPCM.ZSM -o ..\\..\\..\\AUDIOPCM.ZSMCOMP.BIN -b 2"
     }
   }
 }
